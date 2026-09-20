@@ -1,0 +1,14 @@
+from django.urls import path
+from apps.orders.views import (
+    OrderQuoteView,
+    CreateOrderView,
+    UploadSlipView,
+    OrderDetailView
+)
+
+urlpatterns = [
+    path('orders/quote/', OrderQuoteView.as_view(), name='order-quote'),
+    path('orders/', CreateOrderView.as_view(), name='order-create'),
+    path('orders/<uuid:order_id>/upload-slip/', UploadSlipView.as_view(), name='order-upload-slip'),
+    path('orders/<uuid:order_id>/', OrderDetailView.as_view(), name='order-detail'),
+]
