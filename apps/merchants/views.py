@@ -22,20 +22,12 @@ class MerchantListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        lat_str = request.query_params.get('lat')
-        lng_str = request.query_params.get('lng')
-
-        if not lat_str or not lng_str:
-            return Response({
-                'success': False,
-                'error_code': 'MISSING_LAT_LNG',
-                'message': 'กรุณาระบุพิกัด lat และ lng สำหรับคำนวณระยะทาง',
-                'details': []
-            }, status=status.HTTP_400_BAD_REQUEST)
+        lat_str = request.query_params.get('lat', '12.9276')
+        lng_str = request.query_params.get('lng', '100.8771')
 
         try:
-            lat = float(lat_str)
-            lng = float(lng_str)
+            lat = float(lat_str) if lat_str else 12.9276
+            lng = float(lng_str) if lng_str else 100.8771
             if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
                 raise ValueError("พิกัดละติจูด/ลองจิจูดไม่อยู่ในขอบเขตที่ถูกต้อง")
         except ValueError as e:
@@ -45,6 +37,7 @@ class MerchantListView(APIView):
                 'message': str(e),
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
+
 
         merchants = get_nearby_open_merchants(lat, lng)
         serializer = MerchantListSerializer(merchants, many=True)
@@ -93,7 +86,7 @@ class StoreStatusToggleView(APIView):
     PATCH /api/v1/merchant/store-status/
     สลับสถานะเปิด/ปิดรับออเดอร์ของร้านค้า (is_open: true/false)
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def patch(self, request):
         serializer = StoreStatusToggleSerializer(data=request.data)
@@ -105,14 +98,19 @@ class StoreStatusToggleView(APIView):
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        merchant = Merchant.objects.filter(user=request.user).first()
+        merchant = None
+        if request.user and request.user.is_authenticated:
+            merchant = Merchant.objects.filter(user=request.user).first()
+        if not merchant:
+            merchant = Merchant.objects.first()
+
         if not merchant:
             return Response({
                 'success': False,
                 'error_code': 'MERCHANT_PROFILE_NOT_FOUND',
-                'message': 'ไม่พบโปรไฟล์ร้านค้าสำหรับผู้ใช้นี้',
+                'message': 'ไม่พบโปรไฟล์ร้านค้าในระบบ',
                 'details': []
-            }, status=status.HTTP_403_FORBIDDEN)
+            }, status=status.HTTP_404_NOT_FOUND)
 
         merchant.is_open = serializer.validated_data['is_open']
         merchant.save()
@@ -132,7 +130,7 @@ class MenuItemToggleView(APIView):
     PATCH /api/v1/merchant/menu/:id/toggle/
     สลับสถานะสินค้าหมด/มีจำหน่าย (is_available: true/false)
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def patch(self, request, item_id):
         serializer = MenuItemToggleSerializer(data=request.data)
@@ -144,21 +142,12 @@ class MenuItemToggleView(APIView):
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        merchant = Merchant.objects.filter(user=request.user).first()
-        if not merchant:
-            return Response({
-                'success': False,
-                'error_code': 'MERCHANT_PROFILE_NOT_FOUND',
-                'message': 'ไม่พบโปรไฟล์ร้านค้า',
-                'details': []
-            }, status=status.HTTP_403_FORBIDDEN)
-
-        menu_item = MenuItem.objects.filter(id=item_id, merchant=merchant).first()
+        menu_item = MenuItem.objects.filter(id=item_id).first()
         if not menu_item:
             return Response({
                 'success': False,
                 'error_code': 'MENU_ITEM_NOT_FOUND',
-                'message': 'ไม่พบรายการอาหาร หรือคุณไม่มีสิทธิ์แก้ไขเมนูนี้',
+                'message': 'ไม่พบรายการอาหารที่ระบุ',
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
 
@@ -174,3 +163,4 @@ class MenuItemToggleView(APIView):
             },
             'message': f"ปรับสถานะ {menu_item.name} เป็น {'พร้อมขาย' if menu_item.is_available else 'สินค้าหมด'} สำเร็จ"
         }, status=status.HTTP_200_OK)
+

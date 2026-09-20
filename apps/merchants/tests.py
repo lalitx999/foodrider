@@ -54,12 +54,13 @@ class MerchantApiTests(TestCase):
             extra_price=0.00
         )
 
-    def test_merchant_list_requires_lat_lng(self):
-        """ทดสอบไม่ส่งพิกัด lat/lng ต้องได้ 400 BAD REQUEST"""
+    def test_merchant_list_defaults_lat_lng(self):
+        """ทดสอบไม่ส่งพิกัด lat/lng ระบบจะใช้ค่าเริ่มต้นของพิกัดพัทยาและตอบกลับ 200 OK"""
         url = reverse('merchant-list')
         response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(response.data['success'])
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+
 
     def test_merchant_list_with_valid_lat_lng(self):
         """ทดสอบส่งพิกัด lat/lng และคำนวณระยะทางด้วย PostGIS"""

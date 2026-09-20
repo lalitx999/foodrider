@@ -111,6 +111,37 @@ def send_line_flex_notification(line_user_id: str, order: Order) -> bool:
         return False
 
 
+def reply_line_message(reply_token: str, text: str) -> bool:
+    """
+    ตอบกลับข้อความใน LINE Chat ผ่าน Messaging API Reply Endpoint
+    """
+    access_token = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+    if not access_token or not reply_token:
+        return False
+
+    url = 'https://api.line.me/v2/bot/message/reply'
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f"Bearer {access_token}"
+    }
+
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+
 def send_fcm_push_notification(user, title: str, body: str, data_payload: dict = None) -> int:
     """
     ส่ง Web Push Notification ผ่าน FCM ไปยัง PWA ของผู้ใช้ตาม FCM Tokens ที่บันทึกไว้
@@ -121,3 +152,4 @@ def send_fcm_push_notification(user, title: str, body: str, data_payload: dict =
 
     # กรณีพัฒนา local ให้จำลองจำนวนส่งสำเร็จ
     return len(tokens)
+
