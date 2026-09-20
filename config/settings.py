@@ -114,7 +114,9 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
 
 # GDAL & GEOS Configuration สำหรับ macOS (Homebrew Auto-Detection)
 import platform
