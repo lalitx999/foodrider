@@ -17,3 +17,18 @@ class DeviceToken(models.Model):
 
     def __str__(self):
         return f"{self.user.display_name} - FCM Token ({self.fcm_token[:10]}...)"
+
+
+class ProcessedLineWebhookEvent(models.Model):
+    """Records LINE webhook IDs so redelivered events are not processed twice."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    webhook_event_id = models.CharField(max_length=128, unique=True, db_index=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'processed_line_webhook_events'
+        ordering = ['-received_at']
+
+    def __str__(self):
+        return self.webhook_event_id

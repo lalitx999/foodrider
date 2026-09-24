@@ -12,6 +12,7 @@ from apps.merchants.serializers import (
     MenuItemSerializer
 )
 from apps.merchants.services import get_nearby_open_merchants, get_merchant_full_menu
+from apps.users.permissions import HasMerchantProfile
 
 
 class MerchantListView(APIView):
@@ -86,7 +87,7 @@ class StoreStatusToggleView(APIView):
     PATCH /api/v1/merchant/store-status/
     สลับสถานะเปิด/ปิดรับออเดอร์ของร้านค้า (is_open: true/false)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasMerchantProfile]
 
     def patch(self, request):
         serializer = StoreStatusToggleSerializer(data=request.data)
@@ -98,11 +99,7 @@ class StoreStatusToggleView(APIView):
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        merchant = None
-        if request.user and request.user.is_authenticated:
-            merchant = Merchant.objects.filter(user=request.user).first()
-        if not merchant:
-            merchant = Merchant.objects.first()
+        merchant = Merchant.objects.filter(user=request.user).first()
 
         if not merchant:
             return Response({
@@ -130,7 +127,7 @@ class MenuItemToggleView(APIView):
     PATCH /api/v1/merchant/menu/:id/toggle/
     สลับสถานะสินค้าหมด/มีจำหน่าย (is_available: true/false)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasMerchantProfile]
 
     def patch(self, request, item_id):
         serializer = MenuItemToggleSerializer(data=request.data)
@@ -151,6 +148,14 @@ class MenuItemToggleView(APIView):
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
 
+        if menu_item.merchant.user_id != request.user.id:
+            return Response({
+                'success': False,
+                'error_code': 'MENU_ITEM_ACCESS_DENIED',
+                'message': 'คุณไม่มีสิทธิ์จัดการเมนูของร้านนี้',
+                'details': []
+            }, status=status.HTTP_403_FORBIDDEN)
+
         menu_item.is_available = serializer.validated_data['is_available']
         menu_item.save()
 
@@ -163,4 +168,3 @@ class MenuItemToggleView(APIView):
             },
             'message': f"ปรับสถานะ {menu_item.name} เป็น {'พร้อมขาย' if menu_item.is_available else 'สินค้าหมด'} สำเร็จ"
         }, status=status.HTTP_200_OK)
-

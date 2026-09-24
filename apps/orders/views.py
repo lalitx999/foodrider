@@ -16,6 +16,7 @@ from apps.orders.services import (
     OrderCalculationError
 )
 from apps.payments.services import verify_and_process_order_slip, SlipVerificationError
+from apps.users.permissions import HasMerchantProfile
 
 
 class OrderQuoteView(APIView):
@@ -195,6 +196,19 @@ class OrderDetailView(APIView):
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
 
+        can_access_order = (
+            order.customer_id == request.user.id
+            or order.rider_id == request.user.id
+            or (hasattr(request.user, 'merchant_profile') and order.merchant_id == request.user.merchant_profile.id)
+        )
+        if not can_access_order:
+            return Response({
+                'success': False,
+                'error_code': 'ORDER_ACCESS_DENIED',
+                'message': 'คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้',
+                'details': []
+            }, status=status.HTTP_403_FORBIDDEN)
+
         serializer = OrderDetailSerializer(order)
         return Response({
             'success': True,
@@ -208,28 +222,12 @@ class MerchantOrderListView(APIView):
     GET /api/v1/orders/merchant-orders/
     ดึงรายการออเดอร์ของร้านค้า (เรียงลำดับตามเวลาสร้างล่าสุด)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasMerchantProfile]
 
     def get(self, request):
-        merchant_id = request.query_params.get('merchant_id')
-        if merchant_id:
-            orders = Order.objects.filter(merchant_id=merchant_id).order_by('-created_at')
-        elif request.user and request.user.is_authenticated:
-            merchant = Merchant.objects.filter(user=request.user).first()
-            if not merchant:
-                return Response({
-                    'success': False,
-                    'error_code': 'MERCHANT_NOT_FOUND',
-                    'message': 'ไม่พบร้านค้าสำหรับบัญชีนี้',
-                    'details': []
-                }, status=status.HTTP_404_NOT_FOUND)
-            orders = Order.objects.filter(merchant=merchant).order_by('-created_at')
-        else:
-            first_merchant = Merchant.objects.first()
-            if first_merchant:
-                orders = Order.objects.filter(merchant=first_merchant).order_by('-created_at')
-            else:
-                orders = Order.objects.all().order_by('-created_at')
+        orders = Order.objects.filter(
+            merchant=request.user.merchant_profile
+        ).order_by('-created_at')
 
         serializer = OrderDetailSerializer(orders, many=True)
         return Response({
@@ -245,7 +243,7 @@ class OrderStatusUpdateView(APIView):
     อัปเดตสถานะออเดอร์ (PAID -> PREPARING -> READY_FOR_PICKUP -> COMPLETED)
     และยิง LINE Flex Message แจ้งเตือนลูกค้าเรียลไทม์
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasMerchantProfile]
 
     def patch(self, request, order_id):
         new_status = request.data.get('status')
@@ -257,7 +255,10 @@ class OrderStatusUpdateView(APIView):
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        order = Order.objects.filter(id=order_id).first()
+        order = Order.objects.filter(
+            id=order_id,
+            merchant=request.user.merchant_profile
+        ).first()
         if not order:
             return Response({
                 'success': False,
@@ -279,4 +280,3 @@ class OrderStatusUpdateView(APIView):
             'data': serializer.data,
             'message': f'อัปเดตสถานะออเดอร์เป็น {new_status} เรียบร้อยแล้ว'
         }, status=status.HTTP_200_OK)
-

@@ -12,6 +12,7 @@ from apps.riders.serializers import (
     CompleteOrderSerializer
 )
 from apps.riders.services import claim_rider_job_atomic, complete_rider_job_atomic, JobClaimError
+from apps.users.permissions import HasMerchantProfile, HasRiderProfile
 
 
 class RiderStatusToggleView(APIView):
@@ -19,7 +20,7 @@ class RiderStatusToggleView(APIView):
     PATCH /api/v1/rider/status/
     สลับสถานะพร้อมรับงาน (is_online: true/false) และอัปเดตพิกัดตำแหน่งปัจจุบัน
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasRiderProfile]
 
     def patch(self, request):
         serializer = RiderStatusToggleSerializer(data=request.data)
@@ -31,14 +32,7 @@ class RiderStatusToggleView(APIView):
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        user = request.user if (request.user and request.user.is_authenticated) else User.objects.filter(role='RIDER').first()
-        if not user:
-            user = User.objects.first()
-
-        profile, created = RiderProfile.objects.get_or_create(
-            user=user,
-            defaults={'vehicle_plate': 'กข-1234'}
-        )
+        profile = request.user.rider_profile
 
         is_online = serializer.validated_data['is_online']
         lat = serializer.validated_data.get('current_lat')
@@ -68,7 +62,7 @@ class AvailableJobsListView(APIView):
     GET /api/v1/rider/orders/available/
     ดึงรายการงานว่างทั้งหมดที่พร้อมให้ไรเดอร์กดรับ (status = READY_FOR_PICKUP และยังไม่มีไรเดอร์รับงาน)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasRiderProfile]
 
     def get(self, request):
         available_orders = Order.objects.filter(
@@ -90,15 +84,11 @@ class ClaimJobView(APIView):
     POST /api/v1/rider/orders/:id/claim/
     ไรเดอร์กดยืนยันรับงาน (ใช้ Row Locking select_for_update ป้องกันคนกดรับงานซ้ำ)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasRiderProfile]
 
     def post(self, request, order_id):
-        user = request.user if (request.user and request.user.is_authenticated) else User.objects.filter(role='RIDER').first()
-        if not user:
-            user = User.objects.first()
-
         try:
-            order = claim_rider_job_atomic(user, str(order_id))
+            order = claim_rider_job_atomic(request.user, str(order_id))
             
             # Google Maps Navigation Deep Links
             merchant_nav = f"https://www.google.com/maps/dir/?api=1&destination={order.merchant.latitude},{order.merchant.longitude}"
@@ -130,7 +120,7 @@ class CompleteJobView(APIView):
     POST /api/v1/rider/orders/:id/complete/
     ไรเดอร์แนบรูปหลักฐานการส่งมอบ ปิดงาน และรับเครดิตค่ารอบเข้า Wallet
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasRiderProfile]
 
     def post(self, request, order_id):
         serializer = CompleteOrderSerializer(data=request.data)
@@ -142,15 +132,10 @@ class CompleteJobView(APIView):
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        user = request.user if (request.user and request.user.is_authenticated) else User.objects.filter(role='RIDER').first()
-        if not user:
-            user = User.objects.first()
-
         try:
             proof_url = serializer.validated_data['proof_image_url']
-            order = complete_rider_job_atomic(user, str(order_id), proof_url)
-            rider_profile = RiderProfile.objects.filter(user=user).first()
-            wallet_bal = rider_profile.wallet_balance if rider_profile else 0.0
+            order = complete_rider_job_atomic(request.user, str(order_id), proof_url)
+            wallet_bal = request.user.rider_profile.wallet_balance
 
             return Response({
                 'success': True,
@@ -177,10 +162,10 @@ class MerchantOrderReadyView(APIView):
     POST /api/v1/merchant/orders/:id/ready/
     ร้านค้ากดอาหารทำเสร็จแล้ว (เปลี่ยนสถานะจาก PREPARING -> READY_FOR_PICKUP) เพื่อปล่อยงานให้ไรเดอร์เห็น
     """
-    permission_classes = [AllowAny]
+    permission_classes = [HasMerchantProfile]
 
     def post(self, request, order_id):
-        order = Order.objects.filter(id=order_id).first()
+        order = Order.objects.filter(id=order_id, merchant__user=request.user).first()
         if not order:
             return Response({
                 'success': False,
@@ -201,4 +186,3 @@ class MerchantOrderReadyView(APIView):
             },
             'message': 'ปรับสถานะเป็น READY_FOR_PICKUP ปล่อยงานให้ไรเดอร์รับเรียบร้อยแล้ว'
         }, status=status.HTTP_200_OK)
-

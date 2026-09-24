@@ -114,8 +114,21 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = True
+# Production must explicitly list every frontend origin that may call this API.
+# An empty list intentionally denies browser cross-origin requests.
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+
+# HTTPS is terminated by the reverse proxy in production. These settings make
+# Django treat the forwarded protocol as authoritative and protect browser
+# sessions and sensitive response data.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = env.bool('DJANGO_SECURE_SSL_REDIRECT', default=False)
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
 
 
 # GDAL & GEOS Configuration สำหรับ macOS (Homebrew Auto-Detection)
@@ -127,4 +140,3 @@ if platform.system() == 'Darwin':
         GDAL_LIBRARY_PATH = mac_gdal_path
     if os.path.exists(mac_geos_path):
         GEOS_LIBRARY_PATH = mac_geos_path
-

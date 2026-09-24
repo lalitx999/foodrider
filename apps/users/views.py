@@ -3,6 +3,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from apps.users.models import User
+from apps.users.models import UserRole
+from apps.merchants.models import Merchant
+from apps.riders.models import RiderProfile
 from apps.users.serializers import (
     LineVerifySerializer,
     GoogleVerifySerializer,
@@ -140,6 +143,22 @@ class SetRoleView(APIView):
                 'message': 'ไม่พบผู้ใช้ที่ระบุ',
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
+
+        if new_role == UserRole.MERCHANT and not Merchant.objects.filter(user=user).exists():
+            return Response({
+                'success': False,
+                'error_code': 'MERCHANT_PROFILE_REQUIRED',
+                'message': 'ต้องสร้างโปรไฟล์ร้านค้าและผูกกับผู้ใช้นี้ก่อนกำหนดสิทธิ์ร้านค้า',
+                'details': []
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_role == UserRole.RIDER and not RiderProfile.objects.filter(user=user).exists():
+            return Response({
+                'success': False,
+                'error_code': 'RIDER_PROFILE_REQUIRED',
+                'message': 'ต้องสร้างโปรไฟล์ไรเดอร์และผูกกับผู้ใช้นี้ก่อนกำหนดสิทธิ์ไรเดอร์',
+                'details': []
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         user.role = new_role
         user.save()

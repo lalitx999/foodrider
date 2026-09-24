@@ -1,3 +1,10 @@
+import base64
+import hashlib
+import hmac
+import json
+import os
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -5,7 +12,7 @@ from rest_framework import status
 from apps.users.models import User, UserRole
 from apps.orders.models import Order, OrderStatus
 from apps.merchants.models import Merchant
-from apps.notifications.models import DeviceToken
+from apps.notifications.models import DeviceToken, ProcessedLineWebhookEvent
 from apps.notifications.services import build_order_status_flex_message
 
 
@@ -14,6 +21,7 @@ class NotificationApiTests(TestCase):
         self.client = APIClient()
         self.user = User.objects.create(display_name='Notification User', role=UserRole.CUSTOMER)
         self.register_url = reverse('register-device')
+        self.webhook_url = reverse('line-webhook')
 
     def test_register_device_token(self):
         """ทดสอบลงทะเบียน FCM Device Token"""
@@ -60,3 +68,46 @@ class NotificationApiTests(TestCase):
         self.assertEqual(flex_dict['type'], 'bubble')
         self.assertEqual(flex_dict['header']['backgroundColor'], '#689D4B')
         self.assertIn('ORD-FLEX-1', flex_dict['header']['contents'][1]['text'])
+
+    @patch.dict(os.environ, {'LINE_CHANNEL_SECRET': 'test-channel-secret'}, clear=False)
+    def test_line_webhook_rejects_invalid_signature(self):
+        response = self.client.generic(
+            'POST',
+            self.webhook_url,
+            data=b'{"events": []}',
+            content_type='application/json',
+            HTTP_X_LINE_SIGNATURE='invalid-signature',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ProcessedLineWebhookEvent.objects.count(), 0)
+
+    @patch('apps.notifications.services.reply_line_flex_message', return_value=True)
+    @patch.dict(os.environ, {'LINE_CHANNEL_SECRET': 'test-channel-secret'}, clear=False)
+    def test_line_webhook_ignores_redelivered_event(self, mock_reply):
+        payload = {
+            'events': [{
+                'webhookEventId': '01HWEBHOOKEVENTIDTEST00000001',
+                'type': 'message',
+                'replyToken': 'reply-token',
+                'source': {'userId': 'Utest'},
+                'message': {'type': 'text', 'text': 'สั่งอาหาร'},
+            }]
+        }
+        body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+        signature = base64.b64encode(
+            hmac.new(b'test-channel-secret', body, hashlib.sha256).digest()
+        ).decode('utf-8')
+
+        for _ in range(2):
+            response = self.client.generic(
+                'POST',
+                self.webhook_url,
+                data=body,
+                content_type='application/json',
+                HTTP_X_LINE_SIGNATURE=signature,
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(mock_reply.call_count, 1)
+        self.assertEqual(ProcessedLineWebhookEvent.objects.count(), 1)
