@@ -59,7 +59,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
 
     if request.requested_role == UserRole.MERCHANT:
         application = request.merchant_application
-        if not application or application.status != ApplicationStatus.PENDING_REVIEW:
+        if not application or application.status not in [ApplicationStatus.PENDING_REVIEW, ApplicationStatus.APPROVED]:
             raise RoleChangeApprovalError('ไม่พบใบสมัครร้านค้าที่พร้อมอนุมัติ')
         if not all([application.bank_account_name, application.bank_account_number, application.bank_name]):
             raise RoleChangeApprovalError('ใบสมัครร้านค้ายังขาดข้อมูลบัญชีรับเงิน')
@@ -68,12 +68,12 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
             user=user,
             defaults={
                 'name': application.store_name,
-                'image_url': application.storefront_image.url,
+                'image_url': application.storefront_image.url if application.storefront_image else '',
                 'phone_number': application.phone_number,
                 'address': application.address,
                 'latitude': application.latitude,
                 'longitude': application.longitude,
-                'location': Point(application.longitude, application.latitude, srid=4326),
+                'location': Point(application.longitude, application.latitude, srid=4326) if application.longitude and application.latitude else None,
                 'bank_account_name': application.bank_account_name,
                 'bank_account_number': application.bank_account_number,
                 'bank_name': application.bank_name,
@@ -85,7 +85,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
         application.save(update_fields=['status', 'admin_note', 'reviewed_at', 'updated_at'])
     elif request.requested_role == UserRole.RIDER:
         application = request.rider_application
-        if not application or application.status != ApplicationStatus.PENDING_REVIEW:
+        if not application or application.status not in [ApplicationStatus.PENDING_REVIEW, ApplicationStatus.APPROVED]:
             raise RoleChangeApprovalError('ไม่พบใบสมัครไรเดอร์ที่พร้อมอนุมัติ')
         from apps.riders.models import RiderProfile
         RiderProfile.objects.get_or_create(

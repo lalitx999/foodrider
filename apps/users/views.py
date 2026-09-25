@@ -187,7 +187,16 @@ class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        serializer = UserProfileSerializer(request.user)
+        user = request.user
+        # Auto-sync role if application was approved but user.role wasn't updated
+        if hasattr(user, 'merchant_application') and user.merchant_application.status == ApplicationStatus.APPROVED and user.role != UserRole.MERCHANT:
+            user.role = UserRole.MERCHANT
+            user.save(update_fields=['role', 'updated_at'])
+        elif hasattr(user, 'rider_application') and user.rider_application.status == ApplicationStatus.APPROVED and user.role != UserRole.RIDER:
+            user.role = UserRole.RIDER
+            user.save(update_fields=['role', 'updated_at'])
+
+        serializer = UserProfileSerializer(user)
         return Response({
             'success': True,
             'data': serializer.data,
