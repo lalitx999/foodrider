@@ -9,7 +9,9 @@ class DeviceToken(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='device_tokens')
-    fcm_token = models.CharField(max_length=255, unique=True, db_index=True)
+    fcm_token = models.CharField(max_length=4096, unique=True, db_index=True)
+    is_active = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -19,16 +21,20 @@ class DeviceToken(models.Model):
         return f"{self.user.display_name} - FCM Token ({self.fcm_token[:10]}...)"
 
 
-class ProcessedLineWebhookEvent(models.Model):
-    """Records LINE webhook IDs so redelivered events are not processed twice."""
+class Notification(models.Model):
+    """Event จริงในระบบ; FCM เป็น delivery channel ไม่ใช่ source of truth."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    webhook_event_id = models.CharField(max_length=128, unique=True, db_index=True)
-    received_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    data = models.JSONField(default=dict, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = 'processed_line_webhook_events'
-        ordering = ['-received_at']
+        db_table = 'notifications'
+        ordering = ['-created_at']
 
     def __str__(self):
-        return self.webhook_event_id
+        return self.title

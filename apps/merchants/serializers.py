@@ -32,6 +32,14 @@ class CategoryWithMenuSerializer(serializers.ModelSerializer):
 
 class MerchantListSerializer(serializers.ModelSerializer):
     distance_km = serializers.FloatField(read_only=True)
+    image_url = serializers.SerializerMethodField()
+
+    def get_image_url(self, obj):
+        value = obj.image_url
+        if not value:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(value) if request and value.startswith('/') else value
 
     class Meta:
         model = Merchant

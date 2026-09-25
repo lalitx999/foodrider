@@ -46,6 +46,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     merchant_name = serializers.CharField(source='merchant.name', read_only=True)
     customer_name = serializers.CharField(source='customer.display_name', read_only=True)
     rider_name = serializers.CharField(source='rider.display_name', read_only=True, default=None)
+    rider_phone = serializers.CharField(source='rider.phone_number', read_only=True, default=None)
+    rider_vehicle_plate = serializers.CharField(source='rider.rider_profile.vehicle_plate', read_only=True, default=None)
 
     class Meta:
         model = Order
@@ -59,6 +61,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'customer_name',
             'rider_id',
             'rider_name',
+            'rider_phone',
+            'rider_vehicle_plate',
             'subtotal',
             'delivery_fee',
             'total_amount',

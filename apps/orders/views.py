@@ -2,6 +2,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.core.files.storage import default_storage
+from django.utils.text import get_valid_filename
+from uuid import uuid4
 from apps.orders.models import Order, OrderStatus
 from apps.merchants.models import Merchant
 from apps.orders.serializers import (
@@ -16,7 +19,9 @@ from apps.orders.services import (
     OrderCalculationError
 )
 from apps.payments.services import verify_and_process_order_slip, SlipVerificationError
-from apps.users.permissions import HasMerchantProfile
+from apps.users.permissions import HasMerchantProfile, HasCustomerProfile
+from apps.notifications.fcm import create_and_send_notification
+from apps.payments.promptpay import create_promptpay_qr
 
 
 class OrderQuoteView(APIView):
@@ -35,7 +40,6 @@ class OrderQuoteView(APIView):
                 'message': 'ข้อมูล Payload ไม่ถูกต้อง',
                 'details': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
-
         try:
             quote = calculate_order_quote(
                 merchant_id=str(serializer.validated_data['merchant_id']),
@@ -77,12 +81,23 @@ class OrderQuoteView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
+class PaymentQRView(APIView):
+    permission_classes = [HasCustomerProfile]
+
+    def get(self, request):
+        try:
+            qr_data_url, account = create_promptpay_qr(request.query_params.get('amount'))
+        except ValueError as error:
+            return Response({'success': False, 'error_code': 'PAYMENT_QR_FAILED', 'message': str(error), 'details': []}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'success': True, 'data': {'qr_data_url': qr_data_url, 'promptpay_account': account}})
+
+
 class CreateOrderView(APIView):
     """
     POST /api/v1/orders/
     สร้างคำสั่งซื้อใหม่ (สถานะ PENDING_PAYMENT) พร้อม Snapshot ข้อมูลรายการสินค้าใน Transaction
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasCustomerProfile]
 
     def post(self, request):
         serializer = CreateOrderSerializer(data=request.data)
@@ -131,7 +146,7 @@ class UploadSlipView(APIView):
     POST /api/v1/orders/:id/upload-slip/
     รับไฟล์รูปภาพสลิปการโอนเงิน -> ยิงตรวจ Anti-Fraud -> สลับสถานะออเดอร์เป็น PAID
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasCustomerProfile]
 
     def post(self, request, order_id):
         serializer = UploadSlipSerializer(data=request.data)
@@ -153,10 +168,21 @@ class UploadSlipView(APIView):
             }, status=status.HTTP_404_NOT_FOUND)
 
         slip_image = serializer.validated_data['slip_image']
-        slip_url = f"https://storage.yourdomain.com/slips/{order.id}_{slip_image.name}"
+        safe_name = get_valid_filename(slip_image.name)
+        storage_name = f"payment-slips/{order.id}/{uuid4().hex}_{safe_name}"
+        saved_name = default_storage.save(storage_name, slip_image)
+        slip_url = request.build_absolute_uri(default_storage.url(saved_name))
 
         try:
+            slip_image.seek(0)
             slip_tx = verify_and_process_order_slip(order, slip_image, slip_url)
+            order.refresh_from_db(fields=['status'])
+            create_and_send_notification(
+                user=order.merchant.user,
+                title='มีออเดอร์ใหม่',
+                body=f'ออเดอร์ {order.order_number} ชำระเงินและตรวจสอบสลิปแล้ว',
+                data={'type': 'NEW_PAID_ORDER', 'order_id': str(order.id)},
+            )
             
             return Response({
                 'success': True,
@@ -171,12 +197,16 @@ class UploadSlipView(APIView):
             }, status=status.HTTP_200_OK)
 
         except SlipVerificationError as e:
+            default_storage.delete(saved_name)
             return Response({
                 'success': False,
                 'error_code': 'SLIP_VERIFICATION_FAILED',
                 'message': str(e),
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            default_storage.delete(saved_name)
+            raise
 
 
 class OrderDetailView(APIView):
@@ -237,11 +267,27 @@ class MerchantOrderListView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class CustomerOrderListView(APIView):
+    """GET /api/v1/orders/my-orders/ คืนออเดอร์จริงของผู้ใช้ที่เข้าสู่ระบบ"""
+    permission_classes = [HasCustomerProfile]
+
+    def get(self, request):
+        orders = Order.objects.filter(customer=request.user).select_related(
+            'merchant', 'rider'
+        ).prefetch_related('items').order_by('-created_at')
+        serializer = OrderDetailSerializer(orders, many=True)
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'message': f'ดึงรายการออเดอร์ {orders.count()} รายการสำเร็จ',
+        })
+
+
 class OrderStatusUpdateView(APIView):
     """
     PATCH /api/v1/orders/<uuid:order_id>/status/
     อัปเดตสถานะออเดอร์ (PAID -> PREPARING -> READY_FOR_PICKUP -> COMPLETED)
-    และยิง LINE Flex Message แจ้งเตือนลูกค้าเรียลไทม์
+    และส่ง FCM แจ้งเตือนลูกค้าแบบเรียลไทม์
     """
     permission_classes = [HasMerchantProfile]
 
@@ -267,12 +313,28 @@ class OrderStatusUpdateView(APIView):
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
 
-        order.status = new_status
-        order.save()
+        allowed_transitions = {
+            OrderStatus.PAID: {OrderStatus.PREPARING, OrderStatus.CANCELLED},
+            OrderStatus.PREPARING: {OrderStatus.READY_FOR_PICKUP, OrderStatus.CANCELLED},
+        }
+        if new_status not in allowed_transitions.get(order.status, set()):
+            return Response({
+                'success': False,
+                'error_code': 'INVALID_STATUS_TRANSITION',
+                'message': f'ไม่สามารถเปลี่ยนสถานะจาก {order.status} เป็น {new_status}',
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
 
-        if order.customer and order.customer.line_user_id:
-            from apps.notifications.services import send_line_flex_notification
-            send_line_flex_notification(order.customer.line_user_id, order)
+        order.status = new_status
+        order.save(update_fields=['status', 'updated_at'])
+
+        if order.customer:
+            create_and_send_notification(
+                user=order.customer,
+                title='อัปเดตสถานะออเดอร์',
+                body=f'ออเดอร์ {order.order_number}: {new_status}',
+                data={'type': 'ORDER_STATUS', 'order_id': str(order.id), 'status': new_status},
+            )
 
         serializer = OrderDetailSerializer(order)
         return Response({

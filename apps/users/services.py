@@ -1,12 +1,8 @@
 import os
-import requests
-import logging
-import base64
-import json
+from django.contrib.auth import authenticate
 from django.contrib.gis.geos import Point
 from django.db import transaction
 from django.utils import timezone
-from django.conf import settings
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -14,73 +10,9 @@ from apps.users.models import User, UserRole
 from apps.users.models import ApplicationStatus, RoleChangeRequest, RoleChangeStatus
 
 
-logger = logging.getLogger(__name__)
-
-
 class AuthenticationError(Exception):
     """Custom Exception สำหรับข้อผิดพลาดด้านความปลอดภัยและการยืนยันตัวตน"""
     pass
-
-
-def get_jwt_audience_for_diagnostic(id_token: str) -> str | None:
-    """อ่าน aud เพื่อ diagnostic เท่านั้น ห้ามใช้ยืนยันความน่าเชื่อถือของ token."""
-    try:
-        payload_segment = id_token.split('.')[1]
-        padded_payload = payload_segment + '=' * (-len(payload_segment) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded_payload).decode('utf-8'))
-        audience = payload.get('aud')
-        return audience if isinstance(audience, str) else None
-    except (IndexError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-
-
-def verify_line_id_token(id_token: str) -> dict:
-    """
-    ยิงไปตรวจสอบ Signature ของ LINE ID Token กับ LINE Authorization Endpoint
-    เพื่อป้องกันการปลอมแปลง line_user_id จากฝั่ง Frontend (Zero Trust Security)
-    """
-    line_channel_id = os.environ.get('LINE_CHANNEL_ID')
-    if not line_channel_id:
-        raise AuthenticationError('ยังไม่ได้ตั้งค่า LINE_CHANNEL_ID ที่ Backend')
-
-    token_audience = get_jwt_audience_for_diagnostic(id_token)
-    logger.info(
-        'LINE channel diagnostic: token_aud=%s configured_channel_id=%s match=%s',
-        token_audience,
-        line_channel_id,
-        token_audience == line_channel_id,
-    )
-    if token_audience != line_channel_id:
-        raise AuthenticationError(
-            'LINE_CHANNEL_ID ของ Backend ไม่ตรงกับ Channel ID ของ LIFF token '
-            f'(token aud: {token_audience or "อ่านไม่ได้"})'
-        )
-
-    verify_url = 'https://api.line.me/oauth2/v2.1/verify'
-    
-    response = requests.post(verify_url, data={
-        'id_token': id_token,
-        'client_id': line_channel_id
-    }, timeout=10)
-    
-    if response.status_code != 200:
-        # LINE ส่งรายละเอียดมาเพื่อ debug ได้ แต่ห้าม log id_token
-        logger.warning(
-            'LINE ID token verification failed: status=%s response=%s',
-            response.status_code,
-            response.text[:500],
-        )
-        raise AuthenticationError(
-            'LINE ปฏิเสธ ID token แม้ Channel ID ตรงกันแล้ว; '
-            'ให้ตรวจเวลาเซิร์ฟเวอร์และ LINE Verify response ใน Backend log'
-        )
-        
-    data = response.json()
-    return {
-        'line_user_id': data.get('sub'),
-        'display_name': data.get('name', 'LINE User'),
-        'picture_url': data.get('picture')
-    }
 
 
 def verify_google_id_token(id_token: str) -> dict:
@@ -88,12 +20,16 @@ def verify_google_id_token(id_token: str) -> dict:
     ตรวจสอบความถูกต้องของ Google ID Token ผ่าน google-auth library
     """
     google_client_id = os.environ.get('GOOGLE_CLIENT_ID')
+    if not google_client_id:
+        raise AuthenticationError('ยังไม่ได้ตั้งค่า GOOGLE_CLIENT_ID ที่ Backend')
     try:
         id_info = google_id_token.verify_oauth2_token(
             id_token, 
             google_requests.Request(), 
             google_client_id
         )
+        if not id_info.get('email_verified'):
+            raise AuthenticationError('บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล')
         return {
             'google_user_id': id_info.get('sub'),
             'display_name': id_info.get('name', 'Google User'),
@@ -102,30 +38,6 @@ def verify_google_id_token(id_token: str) -> dict:
         }
     except ValueError as e:
         raise AuthenticationError(f"โทเค็น Google ไม่ถูกต้อง: {str(e)}")
-
-
-def get_or_create_line_user(user_data: dict) -> User:
-    """
-    ดึงข้อมูลผู้ใช้จาก line_user_id หากไม่มีให้สร้างใหม่เป็น UNASSIGNED
-    """
-    line_user_id = user_data['line_user_id']
-    user = User.objects.filter(line_user_id=line_user_id).first()
-    
-    if not user:
-        user = User.objects.create(
-            line_user_id=line_user_id,
-            display_name=user_data['display_name'],
-            picture_url=user_data['picture_url'],
-            role=UserRole.UNASSIGNED
-        )
-    else:
-        # อัปเดตข้อมูลโปรไฟล์ล่าสุดจาก LINE
-        user.display_name = user_data['display_name']
-        if user_data.get('picture_url'):
-            user.picture_url = user_data['picture_url']
-        user.save()
-        
-    return user
 
 
 class RoleChangeApprovalError(Exception):
@@ -199,6 +111,12 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
     request.reviewed_by = reviewer
     request.reviewed_at = timezone.now()
     request.save(update_fields=['status', 'admin_note', 'reviewed_by', 'reviewed_at'])
+    transaction.on_commit(lambda: __import__('apps.notifications.fcm', fromlist=['create_and_send_notification']).create_and_send_notification(
+        user=user,
+        title='อนุมัติการสมัครแล้ว',
+        body=f'บัญชี{request.get_requested_role_display()}ของคุณได้รับการอนุมัติแล้ว',
+        data={'type': 'ROLE_APPROVED', 'role': request.requested_role},
+    ))
     return request
 
 
@@ -222,30 +140,51 @@ def reject_role_change_request(request_id, reviewer: User, admin_note: str) -> R
     request.reviewed_by = reviewer
     request.reviewed_at = timezone.now()
     request.save(update_fields=['status', 'admin_note', 'reviewed_by', 'reviewed_at'])
+    transaction.on_commit(lambda: __import__('apps.notifications.fcm', fromlist=['create_and_send_notification']).create_and_send_notification(
+        user=request.user,
+        title='ผลการตรวจสอบใบสมัคร',
+        body=f'ใบสมัคร{request.get_requested_role_display()}ของคุณยังไม่ได้รับการอนุมัติ: {admin_note}',
+        data={'type': 'ROLE_REJECTED', 'role': request.requested_role},
+    ))
     return request
 
 
 def get_or_create_google_user(user_data: dict) -> User:
     """
-    ดึงข้อมูลผู้ใช้จาก google_user_id หากไม่มีให้สร้างใหม่เป็น Role CUSTOMER
+    ดึงข้อมูลผู้ใช้จาก google_user_id หรือ verified email หากไม่มีให้สร้างใหม่
     """
     google_user_id = user_data['google_user_id']
     user = User.objects.filter(google_user_id=google_user_id).first()
+    if not user and user_data.get('email'):
+        user = User.objects.filter(email__iexact=user_data['email']).first()
     
     if not user:
         user = User.objects.create(
             google_user_id=google_user_id,
+            email=user_data['email'].lower(),
             display_name=user_data['display_name'],
             picture_url=user_data.get('picture_url'),
-            role=UserRole.CUSTOMER
+            role=UserRole.UNASSIGNED
         )
     else:
+        user.google_user_id = google_user_id
         user.display_name = user_data['display_name']
         if user_data.get('picture_url'):
             user.picture_url = user_data['picture_url']
         user.save()
         
     return user
+
+
+def register_email_user(*, display_name: str, email: str, password: str) -> User:
+    user = User(email=email.lower(), display_name=display_name, role=UserRole.UNASSIGNED)
+    user.set_password(password)
+    user.save()
+    return user
+
+
+def authenticate_email_user(*, email: str, password: str) -> User | None:
+    return authenticate(username=email.lower(), password=password)
 
 
 def generate_jwt_tokens(user: User) -> dict:
@@ -265,38 +204,7 @@ def generate_jwt_tokens(user: User) -> dict:
             'display_name': user.display_name,
             'picture_url': user.picture_url,
             'role': user.role,
-            'line_user_id': user.line_user_id,
+            'email': user.email,
             'google_user_id': user.google_user_id,
         }
     }
-
-
-def sync_line_rich_menu(user: User, new_role: str) -> bool:
-    """
-    ยิงไปที่ LINE Messaging API เพื่อเปลี่ยน Rich Menu ประจำตัวบุคคลตาม Role
-    """
-    if not user.line_user_id:
-        return False
-        
-    access_token = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
-    if not access_token:
-        return False
-        
-    rich_menu_mapping = {
-        UserRole.CUSTOMER: os.environ.get('LINE_RICH_MENU_CUSTOMER'),
-        UserRole.MERCHANT: os.environ.get('LINE_RICH_MENU_MERCHANT'),
-        UserRole.RIDER: os.environ.get('LINE_RICH_MENU_RIDER'),
-    }
-    
-    rich_menu_id = rich_menu_mapping.get(new_role)
-    if not rich_menu_id:
-        return False
-        
-    url = f"https://api.line.me/v2/bot/user/{user.line_user_id}/richmenu/{rich_menu_id}"
-    headers = {'Authorization': f"Bearer {access_token}"}
-    
-    try:
-        response = requests.post(url, headers=headers, timeout=5)
-        return response.status_code == 200
-    except requests.RequestException:
-        return False

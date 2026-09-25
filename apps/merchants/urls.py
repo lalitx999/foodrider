@@ -3,12 +3,16 @@ from apps.merchants.views import (
     MerchantListView,
     MerchantMenuView,
     StoreStatusToggleView,
-    MenuItemToggleView
+    MenuItemToggleView,
+    MerchantDashboardView,
+    MenuItemCreateView,
 )
 
 urlpatterns = [
     path('merchants/', MerchantListView.as_view(), name='merchant-list'),
     path('merchants/<uuid:merchant_id>/menu/', MerchantMenuView.as_view(), name='merchant-menu'),
     path('merchant/store-status/', StoreStatusToggleView.as_view(), name='merchant-store-status'),
+    path('merchant/dashboard/', MerchantDashboardView.as_view(), name='merchant-dashboard'),
     path('merchant/menu/<uuid:item_id>/toggle/', MenuItemToggleView.as_view(), name='merchant-menu-toggle'),
+    path('merchant/menu/', MenuItemCreateView.as_view(), name='merchant-menu-create'),
 ]

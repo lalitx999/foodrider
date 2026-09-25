@@ -2,17 +2,8 @@ from rest_framework import serializers
 from apps.users.models import User, UserRole
 from apps.users.bank_encryption import BankDataEncryptionError, encrypt_bank_value
 from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus
-
-
-class LineVerifySerializer(serializers.Serializer):
-    """
-    Serializer ตรวจสอบ Payload การส่ง LINE ID Token
-    """
-    id_token = serializers.CharField(
-        required=True,
-        allow_blank=False,
-        error_messages={'required': 'กรุณาระบุ id_token จาก LINE'}
-    )
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 
 class GoogleVerifySerializer(serializers.Serializer):
@@ -24,6 +15,33 @@ class GoogleVerifySerializer(serializers.Serializer):
         allow_blank=False,
         error_messages={'required': 'กรุณาระบุ id_token จาก Google'}
     )
+
+
+class EmailRegistrationSerializer(serializers.Serializer):
+    display_name = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, min_length=12, trim_whitespace=False)
+    password_confirm = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': 'รหัสผ่านไม่ตรงกัน'})
+        if User.objects.filter(email__iexact=attrs['email']).exists():
+            raise serializers.ValidationError({'email': 'อีเมลนี้ถูกใช้งานแล้ว'})
+        try:
+            validate_password(attrs['password'])
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({'password': list(error.messages)}) from error
+        return attrs
+
+
+class EmailLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class SelectOnboardingRoleSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=[UserRole.CUSTOMER, UserRole.MERCHANT, UserRole.RIDER])
 
 
 class SetRoleSerializer(serializers.Serializer):
@@ -45,11 +63,28 @@ class UserProfileSerializer(serializers.ModelSerializer):
     """
     Serializer สำหรับแสดงผลข้อมูลโปรไฟล์ผู้ใช้
     """
+    default_delivery_address = serializers.SerializerMethodField()
+    delivery_latitude = serializers.SerializerMethodField()
+    delivery_longitude = serializers.SerializerMethodField()
+
+    def _customer_value(self, obj, field):
+        profile = getattr(obj, 'customer_profile', None)
+        return getattr(profile, field, None) if profile else None
+
+    def get_default_delivery_address(self, obj):
+        return self._customer_value(obj, 'default_delivery_address')
+
+    def get_delivery_latitude(self, obj):
+        return self._customer_value(obj, 'delivery_latitude')
+
+    def get_delivery_longitude(self, obj):
+        return self._customer_value(obj, 'delivery_longitude')
+
     class Meta:
         model = User
         fields = [
             'id',
-            'line_user_id',
+            'email',
             'google_user_id',
             'display_name',
             'picture_url',
@@ -57,7 +92,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'role',
             'is_active',
             'created_at',
-            'updated_at'
+            'updated_at',
+            'default_delivery_address',
+            'delivery_latitude',
+            'delivery_longitude',
         ]
         read_only_fields = fields
 

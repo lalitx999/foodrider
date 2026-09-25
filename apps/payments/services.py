@@ -70,7 +70,9 @@ def verify_and_process_order_slip(order: Order, slip_image, slip_image_url: str)
         raise SlipVerificationError("สลิปนี้ถูกนำมาใช้งานในระบบไปแล้ว (Double Spending Detected)")
 
     # 3. ตรวจสอบบัญชีผู้รับเงิน PromptPay ของแพลตฟอร์ม
-    system_account = os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT', '0810000000')
+    system_account = os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT')
+    if not system_account:
+        raise SlipVerificationError('ยังไม่ได้ตั้งค่าบัญชีรับเงิน PLATFORM_PROMPTPAY_ACCOUNT')
     if receiving_account and receiving_account != system_account:
         raise SlipVerificationError("ยอดเงินในสลิปไม่ได้โอนเข้าบัญชี PromptPay ของแพลตฟอร์ม")
 

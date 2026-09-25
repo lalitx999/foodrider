@@ -1,7 +1,9 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from apps.users.views import (
-    LineVerifyView,
+    EmailRegistrationView,
+    EmailLoginView,
+    SelectOnboardingRoleView,
     GoogleVerifyView,
     SetRoleView,
     UserProfileView,
@@ -12,7 +14,9 @@ from apps.users.views import (
 )
 
 urlpatterns = [
-    path('auth/line-verify/', LineVerifyView.as_view(), name='line-verify'),
+    path('auth/register/', EmailRegistrationView.as_view(), name='email-register'),
+    path('auth/login/', EmailLoginView.as_view(), name='email-login'),
+    path('onboarding/select-role/', SelectOnboardingRoleView.as_view(), name='select-onboarding-role'),
     path('auth/google-verify/', GoogleVerifyView.as_view(), name='google-verify'),
     path('auth/set-role/', SetRoleView.as_view(), name='set-role'),
     path('auth/me/', UserProfileView.as_view(), name='user-profile'),

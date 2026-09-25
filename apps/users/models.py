@@ -34,11 +34,11 @@ class OnboardingIntentStatus(models.TextChoices):
 class User(AbstractUser):
     """
     Custom User Model โดยใช้ UUID เป็น Primary Key
-    รองรับการระบุตัวตนคู่ผ่าน LINE User ID และ Google OAuth User ID
+    รองรับ email/password และ Google Identity Services
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=150, unique=True, null=True, blank=True)
-    line_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
+    email = models.EmailField(unique=True, null=True, blank=True, db_index=True)
     google_user_id = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
     display_name = models.CharField(max_length=255)
     picture_url = models.TextField(null=True, blank=True)
@@ -53,7 +53,7 @@ class User(AbstractUser):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    USERNAME_FIELD = 'username'
+    USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['display_name']
 
     class Meta:
@@ -76,7 +76,7 @@ class CustomerProfile(models.Model):
 
 
 class OnboardingIntent(models.Model):
-    """The role selected from LINE before a first-time user opens a registration form."""
+    """The role selected in the PWA before a first-time user opens a registration form."""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='onboarding_intent')
     selected_role = models.CharField(max_length=20, choices=[
         UserRole.CUSTOMER, UserRole.MERCHANT, UserRole.RIDER,

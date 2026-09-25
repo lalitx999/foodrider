@@ -8,14 +8,14 @@ from apps.users.bank_encryption import BankDataEncryptionError, mask_encrypted_b
 @admin.register(CustomerProfile)
 class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'default_delivery_address', 'registered_at')
-    search_fields = ('user__display_name', 'user__line_user_id', 'user__phone_number')
+    search_fields = ('user__display_name', 'user__email', 'user__phone_number')
 
 
 @admin.register(OnboardingIntent)
 class OnboardingIntentAdmin(admin.ModelAdmin):
     list_display = ('user', 'selected_role', 'status', 'selected_at', 'completed_at')
     list_filter = ('selected_role', 'status')
-    search_fields = ('user__display_name', 'user__line_user_id')
+    search_fields = ('user__display_name', 'user__email')
     readonly_fields = ('user', 'selected_role', 'status', 'selected_at', 'completed_at')
 
 
@@ -23,7 +23,7 @@ class OnboardingIntentAdmin(admin.ModelAdmin):
 class MerchantApplicationAdmin(admin.ModelAdmin):
     list_display = ('store_name', 'user', 'status', 'submitted_at', 'reviewed_at')
     list_filter = ('status',)
-    search_fields = ('store_name', 'user__display_name', 'user__line_user_id', 'phone_number')
+    search_fields = ('store_name', 'user__display_name', 'user__email', 'phone_number')
     readonly_fields = ('submitted_at', 'reviewed_at', 'created_at', 'updated_at')
 
 
@@ -31,7 +31,7 @@ class MerchantApplicationAdmin(admin.ModelAdmin):
 class RiderApplicationAdmin(admin.ModelAdmin):
     list_display = ('full_name', 'user', 'vehicle_plate', 'status', 'submitted_at', 'reviewed_at')
     list_filter = ('status',)
-    search_fields = ('full_name', 'user__display_name', 'user__line_user_id', 'phone_number', 'vehicle_plate')
+    search_fields = ('full_name', 'user__display_name', 'user__email', 'phone_number', 'vehicle_plate')
     readonly_fields = ('masked_bank_account_name', 'masked_bank_account_number', 'masked_bank_name', 'submitted_at', 'reviewed_at', 'created_at', 'updated_at')
     exclude = ('bank_account_name_encrypted', 'bank_account_number_encrypted', 'bank_name_encrypted')
 
@@ -59,7 +59,7 @@ class RiderApplicationAdmin(admin.ModelAdmin):
 class RoleChangeRequestAdmin(admin.ModelAdmin):
     list_display = ('user', 'current_role', 'requested_role', 'status', 'requested_at', 'reviewed_by', 'reviewed_at')
     list_filter = ('status', 'requested_role', 'current_role')
-    search_fields = ('user__display_name', 'user__line_user_id')
+    search_fields = ('user__display_name', 'user__email')
     readonly_fields = ('user', 'current_role', 'requested_role', 'merchant_application', 'rider_application', 'requested_at', 'reviewed_at', 'reviewed_by')
     actions = ('approve_selected_requests', 'reject_selected_requests')
 

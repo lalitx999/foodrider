@@ -13,6 +13,7 @@ from apps.riders.serializers import (
 )
 from apps.riders.services import claim_rider_job_atomic, complete_rider_job_atomic, JobClaimError
 from apps.users.permissions import HasMerchantProfile, HasRiderProfile
+from apps.notifications.fcm import create_and_send_notification
 
 
 class RiderStatusToggleView(APIView):
@@ -39,7 +40,7 @@ class RiderStatusToggleView(APIView):
         lng = serializer.validated_data.get('current_lng')
 
         profile.is_online = is_online
-        if lat and lng:
+        if lat is not None and lng is not None:
             profile.current_latitude = lat
             profile.current_longitude = lng
             profile.current_location = Point(lng, lat, srid=4326)
@@ -68,7 +69,7 @@ class AvailableJobsListView(APIView):
         available_orders = Order.objects.filter(
             status=OrderStatus.READY_FOR_PICKUP,
             rider__isnull=True
-        ).select_related('merchant').order_by('-created_at')
+        ).select_related('merchant', 'customer').prefetch_related('items').order_by('-created_at')
 
         serializer = AvailableJobSerializer(available_orders, many=True)
 
@@ -77,6 +78,30 @@ class AvailableJobsListView(APIView):
             'data': serializer.data,
             'message': f'ดึงรายการงานว่าง {len(available_orders)} งานสำเร็จ'
         }, status=status.HTTP_200_OK)
+
+
+class RiderJobHistoryView(APIView):
+    permission_classes = [HasRiderProfile]
+
+    def get(self, request):
+        orders = Order.objects.filter(
+            rider=request.user, status=OrderStatus.COMPLETED
+        ).select_related('merchant').prefetch_related('items').order_by('-updated_at')[:100]
+        data = [{
+            'id': str(order.id), 'order_number': order.order_number,
+            'merchant_name': order.merchant.name,
+            'rider_delivery_fee': order.rider_delivery_fee,
+            'completed_at': order.updated_at,
+        } for order in orders]
+        return Response({'success': True, 'data': data})
+
+
+class RiderWalletView(APIView):
+    permission_classes = [HasRiderProfile]
+
+    def get(self, request):
+        profile = request.user.rider_profile
+        return Response({'success': True, 'data': {'balance': profile.wallet_balance}})
 
 
 class ClaimJobView(APIView):
@@ -89,6 +114,8 @@ class ClaimJobView(APIView):
     def post(self, request, order_id):
         try:
             order = claim_rider_job_atomic(request.user, str(order_id))
+            create_and_send_notification(user=order.customer, title='ไรเดอร์รับงานแล้ว', body=f'ไรเดอร์กำลังนำออเดอร์ {order.order_number} ไปส่ง', data={'type': 'RIDER_CLAIMED', 'order_id': str(order.id)})
+            create_and_send_notification(user=order.merchant.user, title='ไรเดอร์รับงานแล้ว', body=f'ออเดอร์ {order.order_number} มีไรเดอร์มารับอาหาร', data={'type': 'RIDER_CLAIMED', 'order_id': str(order.id)})
             
             # Google Maps Navigation Deep Links
             merchant_nav = f"https://www.google.com/maps/dir/?api=1&destination={order.merchant.latitude},{order.merchant.longitude}"
@@ -133,8 +160,14 @@ class CompleteJobView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            proof_url = serializer.validated_data['proof_image_url']
-            order = complete_rider_job_atomic(request.user, str(order_id), proof_url)
+            order = complete_rider_job_atomic(
+                request.user,
+                str(order_id),
+                proof_image=serializer.validated_data['proof_image'],
+                signature_image=serializer.validated_data.get('signature_image'),
+            )
+            create_and_send_notification(user=order.customer, title='จัดส่งสำเร็จ', body=f'ออเดอร์ {order.order_number} ถูกจัดส่งเรียบร้อยแล้ว', data={'type': 'ORDER_COMPLETED', 'order_id': str(order.id)})
+            create_and_send_notification(user=order.merchant.user, title='จัดส่งสำเร็จ', body=f'ออเดอร์ {order.order_number} ส่งถึงลูกค้าแล้ว', data={'type': 'ORDER_COMPLETED', 'order_id': str(order.id)})
             wallet_bal = request.user.rider_profile.wallet_balance
 
             return Response({
@@ -174,8 +207,28 @@ class MerchantOrderReadyView(APIView):
                 'details': []
             }, status=status.HTTP_404_NOT_FOUND)
 
+        if order.status != OrderStatus.PREPARING:
+            return Response({
+                'success': False,
+                'error_code': 'INVALID_STATUS_TRANSITION',
+                'message': 'เฉพาะออเดอร์ที่กำลังเตรียมอาหารเท่านั้นที่กดพร้อมส่งได้',
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
+
         order.status = OrderStatus.READY_FOR_PICKUP
-        order.save()
+        order.save(update_fields=['status', 'updated_at'])
+        create_and_send_notification(user=order.customer, title='อาหารพร้อมจัดส่ง', body=f'ร้านเตรียมออเดอร์ {order.order_number} เสร็จแล้ว กำลังหาไรเดอร์', data={'type': 'ORDER_READY', 'order_id': str(order.id)})
+        online_riders = RiderProfile.objects.filter(
+            is_online=True,
+            user__is_active=True,
+        ).select_related('user')
+        for rider in online_riders:
+            create_and_send_notification(
+                user=rider.user,
+                title='มีงานจัดส่งใหม่',
+                body=f'{order.merchant.name} มีออเดอร์ {order.order_number} พร้อมรับ',
+                data={'type': 'AVAILABLE_JOB', 'order_id': str(order.id)},
+            )
 
         return Response({
             'success': True,

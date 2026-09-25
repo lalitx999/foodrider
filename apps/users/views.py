@@ -10,24 +10,23 @@ from apps.users.models import UserRole
 from apps.merchants.models import Merchant
 from apps.riders.models import RiderProfile
 from apps.users.serializers import (
-    LineVerifySerializer,
     GoogleVerifySerializer,
     SetRoleSerializer,
     UserProfileSerializer
     , CustomerRegistrationSerializer, MerchantApplicationSerializer, RiderApplicationSerializer,
     ApplicationStatusSerializer
+    , EmailRegistrationSerializer, EmailLoginSerializer, SelectOnboardingRoleSerializer
 )
 from apps.users.models import (
     CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus,
     OnboardingIntent, OnboardingIntentStatus, RoleChangeRequest, RoleChangeStatus,
 )
 from apps.users.services import (
-    verify_line_id_token,
     verify_google_id_token,
-    get_or_create_line_user,
     get_or_create_google_user,
     generate_jwt_tokens,
-    sync_line_rich_menu,
+    register_email_user,
+    authenticate_email_user,
     AuthenticationError
 )
 
@@ -35,56 +34,45 @@ from apps.users.services import (
 logger = logging.getLogger(__name__)
 
 
-class LineVerifyView(APIView):
-    """
-    POST /api/v1/auth/line-verify/
-    รับ id_token จาก LINE LIFF -> ตรวจสอบ Signature กับ LINE API -> คืนค่า JWT Token
-    """
+class EmailRegistrationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = LineVerifySerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response({
-                'success': False,
-                'error_code': 'INVALID_PAYLOAD',
-                'message': 'ข้อมูล Payload ไม่ถูกต้อง',
-                'details': serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        id_token = serializer.validated_data['id_token']
-        # Diagnostic ชั่วคราว: บันทึกเฉพาะรูปแบบ ไม่บันทึก credential จริง
-        logger.info(
-            'LINE ID token diagnostic: length=%s jwt_parts=%s',
-            len(id_token),
-            len(id_token.split('.')),
+        serializer = EmailRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = register_email_user(
+            display_name=serializer.validated_data['display_name'],
+            email=serializer.validated_data['email'],
+            password=serializer.validated_data['password'],
         )
+        return Response({'success': True, 'data': generate_jwt_tokens(user), 'message': 'สมัครสมาชิกสำเร็จ'}, status=status.HTTP_201_CREATED)
 
-        try:
-            line_user_data = verify_line_id_token(id_token)
-            user = get_or_create_line_user(line_user_data)
-            tokens = generate_jwt_tokens(user)
 
-            return Response({
-                'success': True,
-                'data': tokens,
-                'message': 'ยืนยันตัวตนด้วย LINE สำเร็จ'
-            }, status=status.HTTP_200_OK)
+class EmailLoginView(APIView):
+    permission_classes = [AllowAny]
 
-        except AuthenticationError as e:
-            return Response({
-                'success': False,
-                'error_code': 'AUTH_INVALID_TOKEN',
-                'message': str(e),
-                'details': []
-            }, status=status.HTTP_401_UNAUTHORIZED)
-        except Exception as e:
-            return Response({
-                'success': False,
-                'error_code': 'INTERNAL_SERVER_ERROR',
-                'message': 'เกิดข้อผิดพลาดภายในระบบ',
-                'details': [str(e)]
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def post(self, request):
+        serializer = EmailLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = authenticate_email_user(**serializer.validated_data)
+        if not user:
+            return Response({'success': False, 'error_code': 'INVALID_CREDENTIALS', 'message': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง', 'details': []}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({'success': True, 'data': generate_jwt_tokens(user), 'message': 'เข้าสู่ระบบสำเร็จ'})
+
+
+class SelectOnboardingRoleView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if request.user.role != UserRole.UNASSIGNED:
+            return Response({'success': False, 'error_code': 'ROLE_ALREADY_ASSIGNED', 'message': 'บัญชีนี้มีบทบาทแล้ว', 'details': []}, status=status.HTTP_409_CONFLICT)
+        serializer = SelectOnboardingRoleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        intent, _ = OnboardingIntent.objects.update_or_create(
+            user=request.user,
+            defaults={'selected_role': serializer.validated_data['role'], 'status': OnboardingIntentStatus.PENDING, 'completed_at': None},
+        )
+        return Response({'success': True, 'data': {'role': intent.selected_role}, 'message': 'เลือกบทบาทสำเร็จ'})
 
 
 class GoogleVerifyView(APIView):
@@ -136,7 +124,7 @@ class GoogleVerifyView(APIView):
 class SetRoleView(APIView):
     """
     POST /api/v1/auth/set-role/
-    สลับ Role ของผู้ใช้ และยิงไปเปลี่ยน LINE Rich Menu ประจำตัวบุคคลทันที (เฉพาะ Admin)
+    สลับ Role ของผู้ใช้ (เฉพาะ Admin)
     """
     permission_classes = [IsAdminUser]
 
@@ -181,15 +169,11 @@ class SetRoleView(APIView):
         user.role = new_role
         user.save()
 
-        # สลับ LINE Rich Menu ประจำตัวบุคคล
-        rich_menu_synced = sync_line_rich_menu(user, new_role)
-
         return Response({
             'success': True,
             'data': {
                 'user_id': str(user.id),
                 'role': user.role,
-                'rich_menu_synced': rich_menu_synced
             },
             'message': f'เปลี่ยน Role เป็น {new_role} สำเร็จ'
         }, status=status.HTTP_200_OK)
@@ -217,7 +201,7 @@ class CustomerRegistrationView(APIView):
     def post(self, request):
         intent = getattr(request.user, 'onboarding_intent', None)
         if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.CUSTOMER:
-            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเลือกบทบาทก่อนเริ่มลงทะเบียน', 'details': []}, status=status.HTTP_409_CONFLICT)
         if request.user.role not in {UserRole.UNASSIGNED, UserRole.CUSTOMER}:
             return Response({
                 'success': False,
@@ -252,7 +236,7 @@ class MerchantApplicationView(APIView):
     def post(self, request):
         intent = getattr(request.user, 'onboarding_intent', None)
         if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.MERCHANT:
-            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเลือกบทบาทก่อนเริ่มลงทะเบียน', 'details': []}, status=status.HTTP_409_CONFLICT)
         pending_request = RoleChangeRequest.objects.filter(
             user=request.user,
             status=RoleChangeStatus.PENDING,
@@ -295,7 +279,7 @@ class RiderApplicationView(APIView):
     def post(self, request):
         intent = getattr(request.user, 'onboarding_intent', None)
         if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.RIDER:
-            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเลือกบทบาทก่อนเริ่มลงทะเบียน', 'details': []}, status=status.HTTP_409_CONFLICT)
         pending_request = RoleChangeRequest.objects.filter(
             user=request.user,
             status=RoleChangeStatus.PENDING,

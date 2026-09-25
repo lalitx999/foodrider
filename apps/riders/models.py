@@ -28,3 +28,16 @@ class RiderProfile(models.Model):
 
     def __str__(self):
         return f"Rider: {self.user.display_name} - Plate: {self.vehicle_plate} (Online: {self.is_online})"
+
+
+class DeliveryProof(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.OneToOneField('orders.Order', on_delete=models.RESTRICT, related_name='delivery_proof')
+    rider = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='delivery_proofs')
+    proof_image = models.ImageField(upload_to='delivery-proofs/images/')
+    signature_image = models.ImageField(upload_to='delivery-proofs/signatures/', null=True, blank=True)
+    recipient_confirmed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'delivery_proofs'

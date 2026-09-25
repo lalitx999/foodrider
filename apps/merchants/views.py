@@ -13,6 +13,7 @@ from apps.merchants.serializers import (
 )
 from apps.merchants.services import get_nearby_open_merchants, get_merchant_full_menu
 from apps.users.permissions import HasMerchantProfile
+from django.db import transaction
 
 
 class MerchantListView(APIView):
@@ -41,7 +42,7 @@ class MerchantListView(APIView):
 
 
         merchants = get_nearby_open_merchants(lat, lng)
-        serializer = MerchantListSerializer(merchants, many=True)
+        serializer = MerchantListSerializer(merchants, many=True, context={'request': request})
 
         return Response({
             'success': True,
@@ -122,6 +123,22 @@ class StoreStatusToggleView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class MerchantDashboardView(APIView):
+    permission_classes = [HasMerchantProfile]
+
+    def get(self, request):
+        merchant = request.user.merchant_profile
+        menu_items = merchant.menu_items.select_related('category').order_by('category__sort_order', 'name')
+        return Response({'success': True, 'data': {
+            'id': str(merchant.id), 'name': merchant.name, 'is_open': merchant.is_open,
+            'menu_items': [{
+                'id': str(item.id), 'name': item.name,
+                'category': item.category.name if item.category else 'ไม่มีหมวดหมู่',
+                'price': item.price, 'is_available': item.is_available,
+            } for item in menu_items],
+        }})
+
+
 class MenuItemToggleView(APIView):
     """
     PATCH /api/v1/merchant/menu/:id/toggle/
@@ -168,3 +185,29 @@ class MenuItemToggleView(APIView):
             },
             'message': f"ปรับสถานะ {menu_item.name} เป็น {'พร้อมขาย' if menu_item.is_available else 'สินค้าหมด'} สำเร็จ"
         }, status=status.HTTP_200_OK)
+
+
+class MenuItemCreateView(APIView):
+    permission_classes = [HasMerchantProfile]
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = CreateMenuItemSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        category = None
+        if data.get('category_id'):
+            category = Category.objects.filter(id=data['category_id'], merchant=request.user.merchant_profile).first()
+            if not category:
+                return Response({'success': False, 'error_code': 'CATEGORY_NOT_FOUND', 'message': 'ไม่พบหมวดหมู่ของร้านนี้', 'details': []}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            category, _ = Category.objects.get_or_create(
+                merchant=request.user.merchant_profile,
+                name='เมนูทั่วไป',
+                defaults={'sort_order': 0},
+            )
+        options = data.pop('options', [])
+        data.pop('category_id', None)
+        item = MenuItem.objects.create(merchant=request.user.merchant_profile, category=category, **data)
+        MenuOption.objects.bulk_create([MenuOption(menu_item=item, **option) for option in options])
+        return Response({'success': True, 'data': MenuItemSerializer(item).data, 'message': 'เพิ่มเมนูเรียบร้อยแล้ว'}, status=status.HTTP_201_CREATED)

@@ -2,7 +2,6 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework import status
-from unittest.mock import patch
 from apps.users.models import (
     ApplicationStatus, MerchantApplication, RiderApplication, RoleChangeRequest,
     RoleChangeStatus, User, UserRole,
@@ -13,14 +12,13 @@ from apps.users.services import approve_role_change_request, reject_role_change_
 class AuthenticationApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.line_verify_url = reverse('line-verify')
+        self.register_url = reverse('email-register')
         self.google_verify_url = reverse('google-verify')
         self.profile_url = reverse('user-profile')
         self.set_role_url = reverse('set-role')
 
-    def test_line_verify_missing_payload(self):
-        """ทดสอบการส่ง payload ว่างเปล่า ต้องได้ 400 BAD REQUEST"""
-        response = self.client.post(self.line_verify_url, {}, format='json')
+    def test_email_register_missing_payload(self):
+        response = self.client.post(self.register_url, {}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data['success'])
         self.assertEqual(response.data['error_code'], 'INVALID_PAYLOAD')
@@ -32,25 +30,16 @@ class AuthenticationApiTests(TestCase):
         self.assertFalse(response.data['success'])
         self.assertEqual(response.data['error_code'], 'INVALID_PAYLOAD')
 
-    @patch('apps.users.services.requests.post')
-    def test_line_verify_success_creates_user(self, mock_post):
-        """ทดสอบยิง LINE verify สำเร็จ ต้องสร้าง User ใหม่ role UNASSIGNED และออก JWT Token"""
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            'sub': 'U1234567890abcdef',
-            'name': 'Somchai LINE',
-            'picture': 'https://example.com/profile.jpg'
-        }
-
-        response = self.client.post(self.line_verify_url, {'id_token': 'valid_line_token'}, format='json')
+    def test_email_register_creates_unassigned_user(self):
+        response = self.client.post(self.register_url, {'display_name': 'Somchai', 'email': 'somchai@example.com', 'password': 'safe-password-123', 'password_confirm': 'safe-password-123'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['success'])
         self.assertIn('access', response.data['data'])
         self.assertIn('refresh', response.data['data'])
 
         # ตรวจสอบการสร้าง User ในฐานข้อมูล
-        user = User.objects.get(line_user_id='U1234567890abcdef')
-        self.assertEqual(user.display_name, 'Somchai LINE')
+        user = User.objects.get(email='somchai@example.com')
+        self.assertEqual(user.display_name, 'Somchai')
         self.assertEqual(user.role, UserRole.UNASSIGNED)
 
     def test_profile_requires_authentication(self):
@@ -62,7 +51,7 @@ class AuthenticationApiTests(TestCase):
         """ทดสอบเข้าถึง Profile พร้อม JWT Token ต้องได้ข้อมูล 200 OK"""
         user = User.objects.create(
             display_name='Test User',
-            line_user_id='U99999999',
+            email='customer@example.com',
             role=UserRole.CUSTOMER
         )
         self.client.force_authenticate(user=user)

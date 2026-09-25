@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db import transaction
 from apps.orders.models import Order, OrderStatus
-from apps.riders.models import RiderProfile
+from apps.riders.models import RiderProfile, DeliveryProof
 from apps.users.models import User
 
 
@@ -16,6 +16,10 @@ def claim_rider_job_atomic(rider_user: User, order_id: str) -> Order:
     ใช้ Pessimistic Locking (select_for_update) บน Database Transaction 
     เพื่อป้องกันไม่ให้ไรเดอร์ 2 คนสามารถกดรับงานเดียวกันได้พร้อมกัน (First-come, First-served)
     """
+    profile = RiderProfile.objects.filter(user=rider_user, is_online=True).first()
+    if not profile:
+        raise JobClaimError('กรุณาเปิดสถานะออนไลน์ก่อนรับงาน')
+
     with transaction.atomic():
         # select_for_update() จะทำการล็อกแถวข้อมูลออเดอร์ในระดับ Database row
         target_order = Order.objects.select_for_update().filter(id=order_id).first()
@@ -33,7 +37,7 @@ def claim_rider_job_atomic(rider_user: User, order_id: str) -> Order:
     return target_order
 
 
-def complete_rider_job_atomic(rider_user: User, order_id: str, proof_image_url: str) -> Order:
+def complete_rider_job_atomic(rider_user: User, order_id: str, *, proof_image, signature_image=None) -> Order:
     """
     ปิดงานจัดส่งอาหารสำเร็จ:
     เปลี่ยนสถานะเป็น COMPLETED และบวกเพิ่มค่าตอบแทนรอบวิ่งเข้า rider_profiles.wallet_balance แบบ Atomic
@@ -50,6 +54,14 @@ def complete_rider_job_atomic(rider_user: User, order_id: str, proof_image_url: 
 
         if order.status != OrderStatus.DELIVERING:
             raise JobClaimError("งานนี้ไม่ได้อยู่ในสถานะกำลังจัดส่ง")
+
+        DeliveryProof.objects.create(
+            order=order,
+            rider=rider_user,
+            proof_image=proof_image,
+            signature_image=signature_image,
+            recipient_confirmed=True,
+        )
 
         order.status = OrderStatus.COMPLETED
         order.save()

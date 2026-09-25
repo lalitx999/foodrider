@@ -17,7 +17,7 @@ class OrderApiTests(TestCase):
         # สร้าง User ลูกค้าและร้านค้า
         self.customer = User.objects.create(
             display_name='Somchai Customer',
-            line_user_id='U_CUSTOMER_123',
+            email='customer@example.com',
             role=UserRole.CUSTOMER
         )
         self.merchant_user = User.objects.create(

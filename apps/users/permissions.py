@@ -33,3 +33,11 @@ class HasRiderProfile(BasePermission):
             and user.role == UserRole.RIDER
             and hasattr(user, 'rider_profile')
         )
+
+
+class HasCustomerProfile(BasePermission):
+    message = 'บัญชีนี้ไม่มีสิทธิ์สั่งอาหาร'
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_active and user.role == UserRole.CUSTOMER and hasattr(user, 'customer_profile'))
