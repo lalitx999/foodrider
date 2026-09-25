@@ -1,5 +1,6 @@
 import os
 import requests
+import logging
 from django.contrib.gis.geos import Point
 from django.db import transaction
 from django.utils import timezone
@@ -9,6 +10,9 @@ from google.auth.transport import requests as google_requests
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.users.models import User, UserRole
 from apps.users.models import ApplicationStatus, RoleChangeRequest, RoleChangeStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuthenticationError(Exception):
@@ -22,6 +26,8 @@ def verify_line_id_token(id_token: str) -> dict:
     เพื่อป้องกันการปลอมแปลง line_user_id จากฝั่ง Frontend (Zero Trust Security)
     """
     line_channel_id = os.environ.get('LINE_CHANNEL_ID')
+    if not line_channel_id:
+        raise AuthenticationError('ยังไม่ได้ตั้งค่า LINE_CHANNEL_ID ที่ Backend')
     verify_url = 'https://api.line.me/oauth2/v2.1/verify'
     
     response = requests.post(verify_url, data={
@@ -30,6 +36,12 @@ def verify_line_id_token(id_token: str) -> dict:
     }, timeout=10)
     
     if response.status_code != 200:
+        # LINE ส่งรายละเอียดมาเพื่อ debug ได้ แต่ห้าม log id_token
+        logger.warning(
+            'LINE ID token verification failed: status=%s response=%s',
+            response.status_code,
+            response.text[:500],
+        )
         raise AuthenticationError("โทเค็น LINE ไม่ถูกต้อง หรือหมดอายุแล้ว")
         
     data = response.json()

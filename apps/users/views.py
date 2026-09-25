@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -30,6 +32,9 @@ from apps.users.services import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class LineVerifyView(APIView):
     """
     POST /api/v1/auth/line-verify/
@@ -48,6 +53,12 @@ class LineVerifyView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         id_token = serializer.validated_data['id_token']
+        # Diagnostic ชั่วคราว: บันทึกเฉพาะรูปแบบ ไม่บันทึก credential จริง
+        logger.info(
+            'LINE ID token diagnostic: length=%s jwt_parts=%s',
+            len(id_token),
+            len(id_token.split('.')),
+        )
 
         try:
             line_user_data = verify_line_id_token(id_token)
