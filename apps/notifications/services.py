@@ -178,16 +178,25 @@ def get_liff_target_url(target_path: str) -> str:
     """
     คืนค่า LIFF URL ที่ตรงกับ role destination โดยเฉพาะ
     """
-    liff_id_environment = {
-        '/customer': 'LINE_LIFF_ID_CUSTOMER',
-        '/merchant': 'LINE_LIFF_ID_MERCHANT',
-        '/rider': 'LINE_LIFF_ID_RIDER',
-    }.get(target_path)
+    role_path = next((path for path in ('/customer', '/merchant', '/rider') if target_path.startswith(path)), None)
+    liff_id_environment = {'/customer': 'LINE_LIFF_ID_CUSTOMER', '/merchant': 'LINE_LIFF_ID_MERCHANT', '/rider': 'LINE_LIFF_ID_RIDER'}.get(role_path)
     liff_id = os.environ.get(liff_id_environment, '').strip() if liff_id_environment else ''
     base_vercel = os.environ.get('VERCEL_APP_URL', 'https://foodrider.vercel.app')
     if liff_id:
-        return f"https://liff.line.me/{liff_id}"
+        suffix = target_path.removeprefix(role_path).lstrip('/') if role_path else ''
+        return f"https://liff.line.me/{liff_id}/{suffix}" if suffix else f"https://liff.line.me/{liff_id}"
     return f"{base_vercel}{target_path}"
+
+
+def build_role_selection_flex() -> dict:
+    buttons = [('ลงทะเบียนลูกค้า', 'CUSTOMER', '#689D4B'), ('ยื่นเปิดร้านอาหาร', 'MERCHANT', '#689D4B'), ('สมัครเป็นไรเดอร์', 'RIDER', '#2563EB')]
+    return {'type': 'bubble', 'body': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'text', 'text': 'ยินดีต้อนรับ', 'weight': 'bold', 'size': 'xl'}, {'type': 'text', 'text': 'เลือกบทบาทเพื่อเริ่มลงทะเบียน', 'wrap': True, 'margin': 'md'}]}, 'footer': {'type': 'box', 'layout': 'vertical', 'spacing': 'sm', 'contents': [{'type': 'button', 'style': 'primary', 'color': color, 'action': {'type': 'postback', 'label': label, 'data': f'onboarding_role={role}'}} for label, role, color in buttons]}}
+
+
+def build_onboarding_start_flex(role: str) -> dict:
+    options = {'CUSTOMER': ('ลงทะเบียนลูกค้า', '/customer/register', '#689D4B'), 'MERCHANT': ('ยื่นเปิดร้านอาหาร', '/merchant/apply', '#689D4B'), 'RIDER': ('สมัครเป็นไรเดอร์', '/rider/apply', '#2563EB')}
+    title, path, color = options[role]
+    return {'type': 'bubble', 'body': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'text', 'text': title, 'weight': 'bold', 'size': 'lg'}, {'type': 'text', 'text': 'เปิดแบบฟอร์มเพื่อกรอกข้อมูลและส่งคำขอ', 'wrap': True, 'size': 'sm', 'margin': 'md'}]}, 'footer': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'button', 'style': 'primary', 'color': color, 'action': {'type': 'uri', 'label': 'เปิดแบบฟอร์ม', 'uri': get_liff_target_url(path)}}]}}
 
 
 def build_customer_command_flex() -> dict:

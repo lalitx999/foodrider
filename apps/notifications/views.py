@@ -128,6 +128,9 @@ class LineWebhookView(APIView):
 
             if event_type == 'follow':
                 logger.info(f"LINE User Followed: {line_user_id}")
+                from apps.notifications.services import reply_line_flex_message, build_role_selection_flex
+                if event.get('replyToken'):
+                    reply_line_flex_message(event['replyToken'], build_role_selection_flex(), alt_text='เลือกบทบาทเพื่อเริ่มลงทะเบียน')
             elif event_type == 'unfollow':
                 logger.info(f"LINE User Unfollowed: {line_user_id}")
             elif event_type == 'message':
@@ -166,5 +169,11 @@ class LineWebhookView(APIView):
                     else:
                         flex_contents = build_welcome_menu_flex()
                         reply_line_flex_message(reply_token, flex_contents, alt_text='เลือกเมนูการใช้งานตามบทบาท Food Delivery')
+
+            elif event_type == 'postback':
+                from apps.notifications.services import reply_line_flex_message, build_onboarding_start_flex
+                role = event.get('postback', {}).get('data', '').removeprefix('onboarding_role=')
+                if event.get('replyToken') and role in {'CUSTOMER', 'MERCHANT', 'RIDER'}:
+                    reply_line_flex_message(event['replyToken'], build_onboarding_start_flex(role), alt_text='เปิดแบบฟอร์มลงทะเบียน')
 
         return Response({'status': 'ok'}, status=status.HTTP_200_OK)
