@@ -50,6 +50,12 @@ def verify_line_id_token(id_token: str) -> dict:
         line_channel_id,
         token_audience == line_channel_id,
     )
+    if token_audience != line_channel_id:
+        raise AuthenticationError(
+            'LINE_CHANNEL_ID ของ Backend ไม่ตรงกับ Channel ID ของ LIFF token '
+            f'(token aud: {token_audience or "อ่านไม่ได้"})'
+        )
+
     verify_url = 'https://api.line.me/oauth2/v2.1/verify'
     
     response = requests.post(verify_url, data={
@@ -64,7 +70,10 @@ def verify_line_id_token(id_token: str) -> dict:
             response.status_code,
             response.text[:500],
         )
-        raise AuthenticationError("โทเค็น LINE ไม่ถูกต้อง หรือหมดอายุแล้ว")
+        raise AuthenticationError(
+            'LINE ปฏิเสธ ID token แม้ Channel ID ตรงกันแล้ว; '
+            'ให้ตรวจเวลาเซิร์ฟเวอร์และ LINE Verify response ใน Backend log'
+        )
         
     data = response.json()
     return {
