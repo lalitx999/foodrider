@@ -104,19 +104,27 @@ class CustomerRegistrationSerializer(serializers.Serializer):
     display_name = serializers.CharField(max_length=255)
     phone_number = serializers.CharField(max_length=20)
     default_delivery_address = serializers.CharField()
+    google_maps_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     delivery_latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
     delivery_longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
 
 
 class MerchantApplicationSerializer(serializers.ModelSerializer):
+    google_maps_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    storefront_image_2 = serializers.ImageField(required=False, allow_null=True)
+    storefront_image_3 = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = MerchantApplication
         fields = [
-            'store_name', 'phone_number', 'address', 'latitude', 'longitude',
-            'storefront_image', 'identity_document', 'bank_account_name',
-            'bank_account_number', 'bank_name',
+            'store_name', 'phone_number', 'address', 'google_maps_url', 'latitude', 'longitude',
+            'storefront_image', 'storefront_image_2', 'storefront_image_3', 'identity_document',
+            'bank_account_name', 'bank_account_number', 'bank_name',
         ]
         extra_kwargs = {
+            'storefront_image': {'required': True},
             'bank_account_name': {'required': True, 'allow_blank': False},
             'bank_account_number': {'required': True, 'allow_blank': False},
             'bank_name': {'required': True, 'allow_blank': False},

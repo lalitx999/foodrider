@@ -18,7 +18,7 @@ from apps.users.serializers import (
     , EmailRegistrationSerializer, EmailLoginSerializer, SelectOnboardingRoleSerializer
 )
 from apps.users.models import (
-    CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus,
+    CustomerProfile, MerchantApplication, MerchantApplicationDocument, RiderApplication, RiderApplicationDocument, ApplicationStatus,
     OnboardingIntent, OnboardingIntentStatus, RoleChangeRequest, RoleChangeStatus,
 )
 from apps.users.services import (
@@ -220,6 +220,7 @@ class CustomerRegistrationView(APIView):
             user=request.user,
             defaults={
                 'default_delivery_address': data['default_delivery_address'],
+                'google_maps_url': data.get('google_maps_url'),
                 'delivery_latitude': data.get('delivery_latitude'),
                 'delivery_longitude': data.get('delivery_longitude'),
             },
@@ -254,6 +255,15 @@ class MerchantApplicationView(APIView):
             user=request.user,
             defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
         )
+
+        # Handle additional document uploads
+        documents = request.FILES.getlist('additional_documents')
+        for doc_file in documents:
+            MerchantApplicationDocument.objects.create(
+                application=application,
+                document=doc_file
+            )
+
         role_request, _ = RoleChangeRequest.objects.update_or_create(
             merchant_application=application,
             defaults={
@@ -297,6 +307,15 @@ class RiderApplicationView(APIView):
             user=request.user,
             defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
         )
+
+        # Handle additional document uploads
+        documents = request.FILES.getlist('additional_documents')
+        for doc_file in documents:
+            RiderApplicationDocument.objects.create(
+                application=application,
+                document=doc_file
+            )
+
         role_request, _ = RoleChangeRequest.objects.update_or_create(
             rider_application=application,
             defaults={

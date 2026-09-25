@@ -67,6 +67,7 @@ class User(AbstractUser):
 class CustomerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='customer_profile')
     default_delivery_address = models.TextField()
+    google_maps_url = models.TextField(null=True, blank=True)
     delivery_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     delivery_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     registered_at = models.DateTimeField(auto_now_add=True)
@@ -94,9 +95,12 @@ class MerchantApplication(models.Model):
     store_name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20)
     address = models.TextField()
-    latitude = models.DecimalField(max_digits=10, decimal_places=7)
-    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    google_maps_url = models.TextField(null=True, blank=True)
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     storefront_image = models.ImageField(upload_to='merchant-applications/storefronts/')
+    storefront_image_2 = models.ImageField(upload_to='merchant-applications/storefronts/', null=True, blank=True)
+    storefront_image_3 = models.ImageField(upload_to='merchant-applications/storefronts/', null=True, blank=True)
     identity_document = models.FileField(upload_to='merchant-applications/identity/', null=True, blank=True)
     bank_account_name = models.CharField(max_length=255, null=True, blank=True)
     bank_account_number = models.CharField(max_length=50, null=True, blank=True)
@@ -110,6 +114,15 @@ class MerchantApplication(models.Model):
 
     class Meta:
         db_table = 'merchant_applications'
+
+
+class MerchantApplicationDocument(models.Model):
+    application = models.ForeignKey(MerchantApplication, on_delete=models.CASCADE, related_name='documents')
+    document = models.FileField(upload_to='merchant-applications/documents/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'merchant_application_documents'
 
 
 class RiderApplication(models.Model):
@@ -132,6 +145,15 @@ class RiderApplication(models.Model):
 
     class Meta:
         db_table = 'rider_applications'
+
+
+class RiderApplicationDocument(models.Model):
+    application = models.ForeignKey(RiderApplication, on_delete=models.CASCADE, related_name='documents')
+    document = models.FileField(upload_to='rider-applications/documents/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'rider_application_documents'
 
 
 class RoleChangeRequest(models.Model):
