@@ -15,7 +15,10 @@ from apps.users.serializers import (
     , CustomerRegistrationSerializer, MerchantApplicationSerializer, RiderApplicationSerializer,
     ApplicationStatusSerializer
 )
-from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus
+from apps.users.models import (
+    CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus,
+    RoleChangeRequest, RoleChangeStatus,
+)
 from apps.users.services import (
     verify_line_id_token,
     verify_google_id_token,
@@ -201,6 +204,13 @@ class CustomerRegistrationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if request.user.role not in {UserRole.UNASSIGNED, UserRole.CUSTOMER}:
+            return Response({
+                'success': False,
+                'error_code': 'ROLE_CHANGE_REQUIRED',
+                'message': 'บัญชีนี้มีบทบาทอื่นอยู่ กรุณายื่นคำขอเปลี่ยนบทบาทผ่านระบบ',
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
         serializer = CustomerRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -223,32 +233,87 @@ class MerchantApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        pending_request = RoleChangeRequest.objects.filter(
+            user=request.user,
+            status=RoleChangeStatus.PENDING,
+        ).exclude(requested_role=UserRole.MERCHANT).exists()
+        if pending_request:
+            return Response({
+                'success': False,
+                'error_code': 'ROLE_CHANGE_ALREADY_PENDING',
+                'message': 'มีคำขอเปลี่ยนบทบาทอื่นที่กำลังรอการตรวจสอบ',
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
         serializer = MerchantApplicationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         application, _ = MerchantApplication.objects.update_or_create(
             user=request.user,
             defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
         )
-        return Response({'success': True, 'data': {'status': application.status}, 'message': 'ส่งใบสมัครร้านค้าเพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
+        role_request, _ = RoleChangeRequest.objects.update_or_create(
+            merchant_application=application,
+            defaults={
+                'user': request.user,
+                'current_role': request.user.role,
+                'requested_role': UserRole.MERCHANT,
+                'rider_application': None,
+                'status': RoleChangeStatus.PENDING,
+                'admin_note': None,
+                'reviewed_by': None,
+                'reviewed_at': None,
+            },
+        )
+        return Response({'success': True, 'data': {'status': application.status, 'role_change_request_id': role_request.id}, 'message': 'ส่งใบสมัครร้านค้าเพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
 
 
 class RiderApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        pending_request = RoleChangeRequest.objects.filter(
+            user=request.user,
+            status=RoleChangeStatus.PENDING,
+        ).exclude(requested_role=UserRole.RIDER).exists()
+        if pending_request:
+            return Response({
+                'success': False,
+                'error_code': 'ROLE_CHANGE_ALREADY_PENDING',
+                'message': 'มีคำขอเปลี่ยนบทบาทอื่นที่กำลังรอการตรวจสอบ',
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
         serializer = RiderApplicationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         application, _ = RiderApplication.objects.update_or_create(
             user=request.user,
             defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
         )
-        return Response({'success': True, 'data': {'status': application.status}, 'message': 'ส่งใบสมัครไรเดอร์เพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
+        role_request, _ = RoleChangeRequest.objects.update_or_create(
+            rider_application=application,
+            defaults={
+                'user': request.user,
+                'current_role': request.user.role,
+                'requested_role': UserRole.RIDER,
+                'merchant_application': None,
+                'status': RoleChangeStatus.PENDING,
+                'admin_note': None,
+                'reviewed_by': None,
+                'reviewed_at': None,
+            },
+        )
+        return Response({'success': True, 'data': {'status': application.status, 'role_change_request_id': role_request.id}, 'message': 'ส่งใบสมัครไรเดอร์เพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
 
 
 class RegistrationStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        role_request = RoleChangeRequest.objects.filter(user=request.user).order_by('-requested_at').first()
+        if role_request:
+            return Response({'success': True, 'data': {
+                'role': role_request.requested_role,
+                'status': role_request.status,
+                'admin_note': role_request.admin_note,
+            }})
         if hasattr(request.user, 'merchant_application'):
             application = request.user.merchant_application
             return Response({'success': True, 'data': {'role': 'MERCHANT', 'status': application.status, 'admin_note': application.admin_note}})

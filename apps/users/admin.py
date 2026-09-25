@@ -1,6 +1,7 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
-from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, User
+from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, RoleChangeRequest, User
+from apps.users.services import RoleChangeApprovalError, approve_role_change_request, reject_role_change_request
 
 
 @admin.register(CustomerProfile)
@@ -23,6 +24,35 @@ class RiderApplicationAdmin(admin.ModelAdmin):
     list_filter = ('status',)
     search_fields = ('full_name', 'user__display_name', 'user__line_user_id', 'phone_number', 'vehicle_plate')
     readonly_fields = ('submitted_at', 'reviewed_at', 'created_at', 'updated_at')
+
+
+@admin.register(RoleChangeRequest)
+class RoleChangeRequestAdmin(admin.ModelAdmin):
+    list_display = ('user', 'current_role', 'requested_role', 'status', 'requested_at', 'reviewed_by', 'reviewed_at')
+    list_filter = ('status', 'requested_role', 'current_role')
+    search_fields = ('user__display_name', 'user__line_user_id')
+    readonly_fields = ('user', 'current_role', 'requested_role', 'merchant_application', 'rider_application', 'requested_at', 'reviewed_at', 'reviewed_by')
+    actions = ('approve_selected_requests', 'reject_selected_requests')
+
+    @admin.action(description='Approve selected role-change requests')
+    def approve_selected_requests(self, request, queryset):
+        for role_request in queryset:
+            try:
+                approve_role_change_request(role_request.id, request.user, role_request.admin_note or '')
+            except RoleChangeApprovalError as error:
+                self.message_user(request, f'{role_request}: {error}', messages.ERROR)
+            else:
+                self.message_user(request, f'{role_request}: อนุมัติและสร้างสิทธิ์เรียบร้อยแล้ว', messages.SUCCESS)
+
+    @admin.action(description='Reject selected role-change requests (admin note is required)')
+    def reject_selected_requests(self, request, queryset):
+        for role_request in queryset:
+            try:
+                reject_role_change_request(role_request.id, request.user, role_request.admin_note or '')
+            except RoleChangeApprovalError as error:
+                self.message_user(request, f'{role_request}: {error}', messages.ERROR)
+            else:
+                self.message_user(request, f'{role_request}: ไม่อนุมัติคำขอแล้ว', messages.SUCCESS)
 
 
 admin.site.register(User)

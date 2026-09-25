@@ -72,7 +72,16 @@ class CustomerRegistrationSerializer(serializers.Serializer):
 class MerchantApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = MerchantApplication
-        fields = ['store_name', 'phone_number', 'address', 'latitude', 'longitude', 'storefront_image', 'identity_document']
+        fields = [
+            'store_name', 'phone_number', 'address', 'latitude', 'longitude',
+            'storefront_image', 'identity_document', 'bank_account_name',
+            'bank_account_number', 'bank_name',
+        ]
+        extra_kwargs = {
+            'bank_account_name': {'required': True, 'allow_blank': False},
+            'bank_account_number': {'required': True, 'allow_blank': False},
+            'bank_name': {'required': True, 'allow_blank': False},
+        }
 
 
 class RiderApplicationSerializer(serializers.ModelSerializer):

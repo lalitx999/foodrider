@@ -4,6 +4,7 @@ from django.db import models
 
 
 class UserRole(models.TextChoices):
+    UNASSIGNED = 'UNASSIGNED', 'Unassigned'
     CUSTOMER = 'CUSTOMER', 'Customer'
     MERCHANT = 'MERCHANT', 'Merchant'
     RIDER = 'RIDER', 'Rider'
@@ -15,6 +16,13 @@ class ApplicationStatus(models.TextChoices):
     PENDING_REVIEW = 'PENDING_REVIEW', 'Pending review'
     APPROVED = 'APPROVED', 'Approved'
     REJECTED = 'REJECTED', 'Rejected'
+
+
+class RoleChangeStatus(models.TextChoices):
+    PENDING = 'PENDING', 'Pending'
+    APPROVED = 'APPROVED', 'Approved'
+    REJECTED = 'REJECTED', 'Rejected'
+    CANCELLED = 'CANCELLED', 'Cancelled'
 
 
 class User(AbstractUser):
@@ -32,7 +40,7 @@ class User(AbstractUser):
     role = models.CharField(
         max_length=20,
         choices=UserRole.choices,
-        default=UserRole.CUSTOMER,
+        default=UserRole.UNASSIGNED,
         db_index=True
     )
     is_active = models.BooleanField(default=True)
@@ -70,6 +78,9 @@ class MerchantApplication(models.Model):
     longitude = models.DecimalField(max_digits=10, decimal_places=7)
     storefront_image = models.ImageField(upload_to='merchant-applications/storefronts/')
     identity_document = models.FileField(upload_to='merchant-applications/identity/', null=True, blank=True)
+    bank_account_name = models.CharField(max_length=255, null=True, blank=True)
+    bank_account_number = models.CharField(max_length=50, null=True, blank=True)
+    bank_name = models.CharField(max_length=100, null=True, blank=True)
     status = models.CharField(max_length=20, choices=ApplicationStatus.choices, default=ApplicationStatus.DRAFT, db_index=True)
     admin_note = models.TextField(null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
@@ -98,3 +109,60 @@ class RiderApplication(models.Model):
 
     class Meta:
         db_table = 'rider_applications'
+
+
+class RoleChangeRequest(models.Model):
+    """Administrative record for a request to move a user to another active role."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='role_change_requests')
+    current_role = models.CharField(max_length=20, choices=UserRole.choices)
+    requested_role = models.CharField(
+        max_length=20,
+        choices=[UserRole.MERCHANT, UserRole.RIDER],
+    )
+    merchant_application = models.OneToOneField(
+        MerchantApplication,
+        on_delete=models.CASCADE,
+        related_name='role_change_request',
+        null=True,
+        blank=True,
+    )
+    rider_application = models.OneToOneField(
+        RiderApplication,
+        on_delete=models.CASCADE,
+        related_name='role_change_request',
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=RoleChangeStatus.choices, default=RoleChangeStatus.PENDING, db_index=True)
+    admin_note = models.TextField(null=True, blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_role_change_requests')
+
+    class Meta:
+        db_table = 'role_change_requests'
+        ordering = ['-requested_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(merchant_application__isnull=False, rider_application__isnull=True)
+                    | models.Q(merchant_application__isnull=True, rider_application__isnull=False)
+                ),
+                name='role_change_request_has_one_application',
+            ),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        has_merchant_application = self.merchant_application_id is not None
+        has_rider_application = self.rider_application_id is not None
+        if has_merchant_application == has_rider_application:
+            raise ValidationError('A role-change request must reference exactly one application.')
+        if self.requested_role == UserRole.MERCHANT and not has_merchant_application:
+            raise ValidationError('Merchant requests must reference a merchant application.')
+        if self.requested_role == UserRole.RIDER and not has_rider_application:
+            raise ValidationError('Rider requests must reference a rider application.')
+
+    def __str__(self):
+        return f'{self.user} {self.current_role} -> {self.requested_role} ({self.status})'

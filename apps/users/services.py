@@ -1,10 +1,14 @@
 import os
 import requests
+from django.contrib.gis.geos import Point
+from django.db import transaction
+from django.utils import timezone
 from django.conf import settings
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.users.models import User, UserRole
+from apps.users.models import ApplicationStatus, RoleChangeRequest, RoleChangeStatus
 
 
 class AuthenticationError(Exception):
@@ -59,7 +63,7 @@ def verify_google_id_token(id_token: str) -> dict:
 
 def get_or_create_line_user(user_data: dict) -> User:
     """
-    ดึงข้อมูลผู้ใช้จาก line_user_id หากไม่มีให้สร้างใหม่เป็น Role CUSTOMER
+    ดึงข้อมูลผู้ใช้จาก line_user_id หากไม่มีให้สร้างใหม่เป็น UNASSIGNED
     """
     line_user_id = user_data['line_user_id']
     user = User.objects.filter(line_user_id=line_user_id).first()
@@ -69,7 +73,7 @@ def get_or_create_line_user(user_data: dict) -> User:
             line_user_id=line_user_id,
             display_name=user_data['display_name'],
             picture_url=user_data['picture_url'],
-            role=UserRole.CUSTOMER
+            role=UserRole.UNASSIGNED
         )
     else:
         # อัปเดตข้อมูลโปรไฟล์ล่าสุดจาก LINE
@@ -79,6 +83,95 @@ def get_or_create_line_user(user_data: dict) -> User:
         user.save()
         
     return user
+
+
+class RoleChangeApprovalError(Exception):
+    pass
+
+
+@transaction.atomic
+def approve_role_change_request(request_id, reviewer: User, admin_note: str = '') -> RoleChangeRequest:
+    """Create the required role profile and switch the user's sole active role atomically."""
+    request = RoleChangeRequest.objects.select_for_update().select_related(
+        'user', 'merchant_application', 'rider_application'
+    ).get(id=request_id)
+    user = User.objects.select_for_update().get(id=request.user_id)
+
+    if request.status != RoleChangeStatus.PENDING:
+        raise RoleChangeApprovalError('คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ')
+    if user.role != request.current_role:
+        raise RoleChangeApprovalError('บทบาทปัจจุบันของผู้ใช้เปลี่ยนไปแล้ว กรุณาตรวจสอบคำขอใหม่')
+
+    if request.requested_role == UserRole.MERCHANT:
+        application = request.merchant_application
+        if not application or application.status != ApplicationStatus.PENDING_REVIEW:
+            raise RoleChangeApprovalError('ไม่พบใบสมัครร้านค้าที่พร้อมอนุมัติ')
+        if not all([application.bank_account_name, application.bank_account_number, application.bank_name]):
+            raise RoleChangeApprovalError('ใบสมัครร้านค้ายังขาดข้อมูลบัญชีรับเงิน')
+        from apps.merchants.models import Merchant
+        Merchant.objects.get_or_create(
+            user=user,
+            defaults={
+                'name': application.store_name,
+                'image_url': application.storefront_image.url,
+                'phone_number': application.phone_number,
+                'address': application.address,
+                'latitude': application.latitude,
+                'longitude': application.longitude,
+                'location': Point(application.longitude, application.latitude, srid=4326),
+                'bank_account_name': application.bank_account_name,
+                'bank_account_number': application.bank_account_number,
+                'bank_name': application.bank_name,
+            },
+        )
+        application.status = ApplicationStatus.APPROVED
+        application.admin_note = admin_note or None
+        application.reviewed_at = timezone.now()
+        application.save(update_fields=['status', 'admin_note', 'reviewed_at', 'updated_at'])
+    elif request.requested_role == UserRole.RIDER:
+        application = request.rider_application
+        if not application or application.status != ApplicationStatus.PENDING_REVIEW:
+            raise RoleChangeApprovalError('ไม่พบใบสมัครไรเดอร์ที่พร้อมอนุมัติ')
+        from apps.riders.models import RiderProfile
+        RiderProfile.objects.get_or_create(user=user, defaults={'vehicle_plate': application.vehicle_plate})
+        application.status = ApplicationStatus.APPROVED
+        application.admin_note = admin_note or None
+        application.reviewed_at = timezone.now()
+        application.save(update_fields=['status', 'admin_note', 'reviewed_at', 'updated_at'])
+    else:
+        raise RoleChangeApprovalError('บทบาทที่ขอไม่รองรับ')
+
+    user.role = request.requested_role
+    user.save(update_fields=['role', 'updated_at'])
+    request.status = RoleChangeStatus.APPROVED
+    request.admin_note = admin_note or None
+    request.reviewed_by = reviewer
+    request.reviewed_at = timezone.now()
+    request.save(update_fields=['status', 'admin_note', 'reviewed_by', 'reviewed_at'])
+    return request
+
+
+@transaction.atomic
+def reject_role_change_request(request_id, reviewer: User, admin_note: str) -> RoleChangeRequest:
+    if not admin_note.strip():
+        raise RoleChangeApprovalError('กรุณาระบุเหตุผลการไม่อนุมัติ')
+    request = RoleChangeRequest.objects.select_for_update().select_related(
+        'merchant_application', 'rider_application'
+    ).get(id=request_id)
+    if request.status != RoleChangeStatus.PENDING:
+        raise RoleChangeApprovalError('คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ')
+    application = request.merchant_application or request.rider_application
+    if application:
+        application.status = ApplicationStatus.REJECTED
+        application.admin_note = admin_note
+        application.reviewed_at = timezone.now()
+        application.save(update_fields=['status', 'admin_note', 'reviewed_at', 'updated_at'])
+    request.status = RoleChangeStatus.REJECTED
+    request.admin_note = admin_note
+    request.reviewed_by = reviewer
+    request.reviewed_at = timezone.now()
+    request.save(update_fields=['status', 'admin_note', 'reviewed_by', 'reviewed_at'])
+    return request
 
 
 def get_or_create_google_user(user_data: dict) -> User:
