@@ -80,7 +80,9 @@ class OnboardingIntent(models.Model):
     """The role selected in the PWA before a first-time user opens a registration form."""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='onboarding_intent')
     selected_role = models.CharField(max_length=20, choices=[
-        UserRole.CUSTOMER, UserRole.MERCHANT, UserRole.RIDER,
+        (UserRole.CUSTOMER.value, UserRole.CUSTOMER.label),
+        (UserRole.MERCHANT.value, UserRole.MERCHANT.label),
+        (UserRole.RIDER.value, UserRole.RIDER.label),
     ])
     status = models.CharField(max_length=20, choices=OnboardingIntentStatus.choices, default=OnboardingIntentStatus.PENDING, db_index=True)
     selected_at = models.DateTimeField(auto_now=True)
@@ -162,7 +164,10 @@ class RoleChangeRequest(models.Model):
     current_role = models.CharField(max_length=20, choices=UserRole.choices)
     requested_role = models.CharField(
         max_length=20,
-        choices=[UserRole.MERCHANT, UserRole.RIDER],
+        choices=[
+            (UserRole.MERCHANT.value, UserRole.MERCHANT.label),
+            (UserRole.RIDER.value, UserRole.RIDER.label),
+        ],
     )
     merchant_application = models.OneToOneField(
         MerchantApplication,

@@ -41,7 +41,11 @@ class EmailLoginSerializer(serializers.Serializer):
 
 
 class SelectOnboardingRoleSerializer(serializers.Serializer):
-    role = serializers.ChoiceField(choices=[UserRole.CUSTOMER, UserRole.MERCHANT, UserRole.RIDER])
+    role = serializers.ChoiceField(choices=[
+        (UserRole.CUSTOMER.value, UserRole.CUSTOMER.label),
+        (UserRole.MERCHANT.value, UserRole.MERCHANT.label),
+        (UserRole.RIDER.value, UserRole.RIDER.label),
+    ])
 
 
 class SetRoleSerializer(serializers.Serializer):
