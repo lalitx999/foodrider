@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from apps.users.models import User, UserRole
+from apps.users.bank_encryption import BankDataEncryptionError, encrypt_bank_value
 from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus
 
 
@@ -85,9 +86,26 @@ class MerchantApplicationSerializer(serializers.ModelSerializer):
 
 
 class RiderApplicationSerializer(serializers.ModelSerializer):
+    bank_account_name = serializers.CharField(write_only=True, max_length=255)
+    bank_account_number = serializers.CharField(write_only=True, max_length=50)
+    bank_name = serializers.CharField(write_only=True, max_length=100)
+
     class Meta:
         model = RiderApplication
-        fields = ['full_name', 'phone_number', 'vehicle_plate', 'driver_license_image', 'vehicle_image', 'additional_document']
+        fields = [
+            'full_name', 'phone_number', 'vehicle_plate', 'driver_license_image',
+            'vehicle_image', 'additional_document', 'bank_account_name',
+            'bank_account_number', 'bank_name',
+        ]
+
+    def validate(self, attrs):
+        try:
+            attrs['bank_account_name_encrypted'] = encrypt_bank_value(attrs.pop('bank_account_name'))
+            attrs['bank_account_number_encrypted'] = encrypt_bank_value(attrs.pop('bank_account_number'))
+            attrs['bank_name_encrypted'] = encrypt_bank_value(attrs.pop('bank_name'))
+        except BankDataEncryptionError as error:
+            raise serializers.ValidationError({'bank_account_number': str(error)}) from error
+        return attrs
 
 
 class ApplicationStatusSerializer(serializers.Serializer):

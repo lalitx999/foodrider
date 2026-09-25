@@ -133,7 +133,15 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
         if not application or application.status != ApplicationStatus.PENDING_REVIEW:
             raise RoleChangeApprovalError('ไม่พบใบสมัครไรเดอร์ที่พร้อมอนุมัติ')
         from apps.riders.models import RiderProfile
-        RiderProfile.objects.get_or_create(user=user, defaults={'vehicle_plate': application.vehicle_plate})
+        RiderProfile.objects.get_or_create(
+            user=user,
+            defaults={
+                'vehicle_plate': application.vehicle_plate,
+                'bank_account_name_encrypted': application.bank_account_name_encrypted,
+                'bank_account_number_encrypted': application.bank_account_number_encrypted,
+                'bank_name_encrypted': application.bank_name_encrypted,
+            },
+        )
         application.status = ApplicationStatus.APPROVED
         application.admin_note = admin_note or None
         application.reviewed_at = timezone.now()

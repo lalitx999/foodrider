@@ -17,6 +17,9 @@ class RiderProfile(models.Model):
     current_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     current_location = gis_models.PointField(srid=4326, null=True, blank=True, spatial_index=True)
     wallet_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    bank_account_name_encrypted = models.TextField(null=True, blank=True)
+    bank_account_number_encrypted = models.TextField(null=True, blank=True)
+    bank_name_encrypted = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
