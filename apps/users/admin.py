@@ -9,7 +9,7 @@ from apps.users.models import (
 from apps.users.services import (
     RoleChangeApprovalError, approve_role_change_request, reject_role_change_request
 )
-from apps.users.bank_encryption import BankDataEncryptionError, mask_encrypted_bank_value
+from apps.users.bank_encryption import BankDataEncryptionError, decrypt_bank_value, mask_encrypted_bank_value
 
 
 def image_preview(field_file, label='ดูรูปภาพ'):
@@ -182,7 +182,7 @@ class RiderApplicationAdmin(admin.ModelAdmin):
     readonly_fields = (
         'user',
         'preview_driver_license', 'preview_vehicle_image', 'preview_additional_document',
-        'masked_bank_account_name', 'masked_bank_account_number', 'masked_bank_name',
+        'decrypted_bank_name', 'decrypted_bank_account_name', 'decrypted_bank_account_number',
         'submitted_at', 'reviewed_at', 'created_at', 'updated_at'
     )
     exclude = ('bank_account_name_encrypted', 'bank_account_number_encrypted', 'bank_name_encrypted')
@@ -202,8 +202,8 @@ class RiderApplicationAdmin(admin.ModelAdmin):
         ('เอกสารเพิ่มเติมหลัก', {
             'fields': ('additional_document', 'preview_additional_document')
         }),
-        ('ข้อมูลบัญชีรับเงิน (ข้อมูลถูกเข้ารหัสปลอดภัย)', {
-            'fields': ('masked_bank_name', 'masked_bank_account_name', 'masked_bank_account_number')
+        ('ข้อมูลบัญชีรับเงิน (ถอดรหัสแสดงผลเต็มสำหรับแอดมิน)', {
+            'fields': ('decrypted_bank_name', 'decrypted_bank_account_name', 'decrypted_bank_account_number')
         }),
         ('การพิจารณาอนุมัติ', {
             'fields': ('status', 'admin_note', 'submitted_at', 'reviewed_at')
@@ -223,23 +223,34 @@ class RiderApplicationAdmin(admin.ModelAdmin):
         return file_preview(obj.additional_document, 'เอกสารเพิ่มเติม')
 
     @admin.display(description='ชื่อบัญชีรับเงิน')
-    def masked_bank_account_name(self, obj):
-        return self._masked_value(obj.bank_account_name_encrypted, 2)
+    def decrypted_bank_account_name(self, obj):
+        return self._unmasked_value(obj.bank_account_name_encrypted)
 
-    @admin.display(description='เลขบัญชีรับเงิน')
-    def masked_bank_account_number(self, obj):
-        return self._masked_value(obj.bank_account_number_encrypted)
+    @admin.display(description='เลขบัญชีรับเงิน (สำหรับโอนเงิน)')
+    def decrypted_bank_account_number(self, obj):
+        if not obj.bank_account_number_encrypted:
+            return '-'
+        try:
+            num = decrypt_bank_value(obj.bank_account_number_encrypted)
+            return format_html(
+                '<span style="font-family: monospace; font-size: 15px; font-weight: bold; color: #166534; background: #dcfce7; padding: 4px 10px; border-radius: 6px; border: 1px solid #86efac; letter-spacing: 0.5px;">{}</span>',
+                num
+            )
+        except Exception:
+            return 'ไม่สามารถถอดรหัสได้'
 
     @admin.display(description='ธนาคาร')
-    def masked_bank_name(self, obj):
-        return self._masked_value(obj.bank_name_encrypted, 2)
+    def decrypted_bank_name(self, obj):
+        return self._unmasked_value(obj.bank_name_encrypted)
 
     @staticmethod
-    def _masked_value(value, visible_characters=4):
+    def _unmasked_value(value):
+        if not value:
+            return '-'
         try:
-            return mask_encrypted_bank_value(value, visible_characters) if value else '-'
-        except BankDataEncryptionError:
-            return 'ไม่สามารถแสดงข้อมูลบัญชีได้'
+            return decrypt_bank_value(value)
+        except Exception:
+            return 'ไม่สามารถถอดรหัสได้'
 
     @admin.action(description='✅ อนุมัติการสมัครไรเดอร์ (อนุมัติสิทธิ์และเปิดใช้งานทันทีในขั้นตอนเดียว)')
     def approve_selected_riders(self, request, queryset):
