@@ -468,5 +468,5 @@ def send_fcm_push_notification(user, title: str, body: str, data_payload: dict =
     if not tokens:
         return 0
 
-    # กรณีพัฒนา local ให้จำลองจำนวนส่งสำเร็จ
-    return len(tokens)
+    # Delivery is intentionally disabled until a real FCM provider is configured.
+    return 0

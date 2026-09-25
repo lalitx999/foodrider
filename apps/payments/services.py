@@ -19,19 +19,7 @@ def call_slip_verify_api(image_file) -> dict:
     api_key = os.environ.get('SLIP_VERIFY_API_KEY')
 
     if not api_url or not api_key or api_key == 'your_slip_verify_api_key':
-        # หากอยู่ในโหมดพัฒนา/ทดสอบ ให้จำลองผลลัพธ์การตรวจสอบสลิปเสมือนจริงที่ถูกต้อง
-        import uuid
-        mock_ref = f"REF{uuid.uuid4().hex[:10].upper()}"
-        return {
-            'is_success': True,
-            'trans_ref': mock_ref,
-            'sending_bank': 'KBANK',
-            'receiving_bank': 'SCB',
-            'sender_name': 'นายทดสอบ โอนเงิน',
-            'amount': str(image_file.size if hasattr(image_file, 'size') else '100.00'),
-            'receiving_account': os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT', '0810000000'),
-            'raw_payload': {'mock': True, 'trans_ref': mock_ref}
-        }
+        raise SlipVerificationError('ยังไม่ได้ตั้งค่าผู้ให้บริการตรวจสอบสลิป')
 
     try:
         headers = {'x-authorization': api_key}
@@ -88,11 +76,7 @@ def verify_and_process_order_slip(order: Order, slip_image, slip_image_url: str)
 
     # 4. ตรวจสอบยอดเงินโอนตรงกับยอดที่ต้องชำระ (Decimal Equality)
     if amount != order.total_amount:
-        # เพื่อการทดสอบโหมด Development หากเป็น mock ให้ปรับยอดเงินให้ตรง
-        if slip_data.get('raw_payload', {}).get('mock'):
-            amount = order.total_amount
-        else:
-            raise SlipVerificationError(f"ยอดเงินในสลิป ({amount} บาท) ไม่ตรงกับยอดที่ต้องชำระ ({order.total_amount} บาท)")
+        raise SlipVerificationError(f"ยอดเงินในสลิป ({amount} บาท) ไม่ตรงกับยอดที่ต้องชำระ ({order.total_amount} บาท)")
 
     # 5. บันทึกและเปลี่ยนสถานะแบบ Atomic Transaction
     with transaction.atomic():
