@@ -203,7 +203,7 @@ def build_customer_command_flex() -> dict:
     """
     คำสั่ง 'สั่งอาหาร': ตอบกลับการ์ดสั่งซื้อสินค้าพัทยา
     """
-    target_url = get_liff_target_url('/customer')
+    target_url = get_liff_target_url('/customer/register')
     return {
         "type": "bubble",
         "hero": {
@@ -242,7 +242,7 @@ def build_customer_command_flex() -> dict:
                     "type": "button",
                     "action": {
                         "type": "uri",
-                        "label": "เลือกร้านและสั่งอาหาร",
+                        "label": "ลงทะเบียนเพื่อสั่งอาหาร",
                         "uri": target_url
                     },
                     "style": "primary",
@@ -257,7 +257,7 @@ def build_merchant_command_flex(action_type: str = 'OPEN') -> dict:
     """
     คำสั่ง 'เปิดร้าน' / 'ปิดร้าน': ตอบกลับการ์ดจัดการห้องครัว KDS
     """
-    target_url = get_liff_target_url('/merchant')
+    target_url = get_liff_target_url('/merchant/apply')
     status_title = "เปิดร้านรับออเดอร์" if action_type == 'OPEN' else "ปิดร้านชั่วคราว"
     status_desc = "ระบบเตรียมพร้อมรับออเดอร์ใหม่เข้าห้องครัว KDS" if action_type == 'OPEN' else "อัปเดตสถานะร้านเป็นปิดรับออเดอร์เรียบร้อย"
 
@@ -299,7 +299,7 @@ def build_merchant_command_flex(action_type: str = 'OPEN') -> dict:
                     "type": "button",
                     "action": {
                         "type": "uri",
-                        "label": "เข้าสู่หน้าจอ KDS ร้านค้า",
+                        "label": "ยื่นเปิดร้านอาหาร",
                         "uri": target_url
                     },
                     "style": "primary",
@@ -314,7 +314,7 @@ def build_rider_command_flex(action_type: str = 'OPEN') -> dict:
     """
     คำสั่ง 'เปิดงาน' / 'ปิดงาน': ตอบกลับการ์ดไรเดอร์ PWA
     """
-    target_url = get_liff_target_url('/rider')
+    target_url = get_liff_target_url('/rider/apply')
     status_title = "เปิดงานสแตนด์บายรับออเดอร์" if action_type == 'OPEN' else "พักงานชั่วคราว"
     status_desc = "ระบบไรเดอร์ออนไลน์ พร้อมรับสัญญาณงานเด้งในพื้นที่พัทยา" if action_type == 'OPEN' else "อัปเดตสถานะไรเดอร์เป็นพักงานเรียบร้อย"
 
@@ -356,7 +356,7 @@ def build_rider_command_flex(action_type: str = 'OPEN') -> dict:
                     "type": "button",
                     "action": {
                         "type": "uri",
-                        "label": "เข้าสู่แอปไรเดอร์",
+                        "label": "สมัครเป็นไรเดอร์",
                         "uri": target_url
                     },
                     "style": "primary",
