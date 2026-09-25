@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from apps.users.models import User, UserRole
+from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus
 
 
 class LineVerifySerializer(serializers.Serializer):
@@ -58,3 +59,29 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = fields
+
+
+class CustomerRegistrationSerializer(serializers.Serializer):
+    display_name = serializers.CharField(max_length=255)
+    phone_number = serializers.CharField(max_length=20)
+    default_delivery_address = serializers.CharField()
+    delivery_latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    delivery_longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+
+
+class MerchantApplicationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MerchantApplication
+        fields = ['store_name', 'phone_number', 'address', 'latitude', 'longitude', 'storefront_image', 'identity_document']
+
+
+class RiderApplicationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RiderApplication
+        fields = ['full_name', 'phone_number', 'vehicle_plate', 'driver_license_image', 'vehicle_image', 'additional_document']
+
+
+class ApplicationStatusSerializer(serializers.Serializer):
+    role = serializers.CharField()
+    status = serializers.ChoiceField(choices=ApplicationStatus.choices)
+    admin_note = serializers.CharField(allow_null=True)

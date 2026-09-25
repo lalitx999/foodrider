@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
+from django.utils import timezone
 from apps.users.models import User
 from apps.users.models import UserRole
 from apps.merchants.models import Merchant
@@ -11,7 +12,10 @@ from apps.users.serializers import (
     GoogleVerifySerializer,
     SetRoleSerializer,
     UserProfileSerializer
+    , CustomerRegistrationSerializer, MerchantApplicationSerializer, RiderApplicationSerializer,
+    ApplicationStatusSerializer
 )
+from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus
 from apps.users.services import (
     verify_line_id_token,
     verify_google_id_token,
@@ -191,3 +195,66 @@ class UserProfileView(APIView):
             'data': serializer.data,
             'message': 'ดึงข้อมูลโปรไฟล์สำเร็จ'
         }, status=status.HTTP_200_OK)
+
+
+class CustomerRegistrationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CustomerRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        request.user.display_name = data['display_name']
+        request.user.phone_number = data['phone_number']
+        request.user.role = UserRole.CUSTOMER
+        request.user.save()
+        CustomerProfile.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'default_delivery_address': data['default_delivery_address'],
+                'delivery_latitude': data.get('delivery_latitude'),
+                'delivery_longitude': data.get('delivery_longitude'),
+            },
+        )
+        return Response({'success': True, 'message': 'ลงทะเบียนลูกค้าสำเร็จ'}, status=status.HTTP_200_OK)
+
+
+class MerchantApplicationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = MerchantApplicationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        application, _ = MerchantApplication.objects.update_or_create(
+            user=request.user,
+            defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
+        )
+        return Response({'success': True, 'data': {'status': application.status}, 'message': 'ส่งใบสมัครร้านค้าเพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
+
+
+class RiderApplicationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RiderApplicationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        application, _ = RiderApplication.objects.update_or_create(
+            user=request.user,
+            defaults={**serializer.validated_data, 'status': ApplicationStatus.PENDING_REVIEW, 'submitted_at': timezone.now(), 'admin_note': None},
+        )
+        return Response({'success': True, 'data': {'status': application.status}, 'message': 'ส่งใบสมัครไรเดอร์เพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
+
+
+class RegistrationStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if hasattr(request.user, 'merchant_application'):
+            application = request.user.merchant_application
+            return Response({'success': True, 'data': {'role': 'MERCHANT', 'status': application.status, 'admin_note': application.admin_note}})
+        if hasattr(request.user, 'rider_application'):
+            application = request.user.rider_application
+            return Response({'success': True, 'data': {'role': 'RIDER', 'status': application.status, 'admin_note': application.admin_note}})
+        if hasattr(request.user, 'customer_profile'):
+            return Response({'success': True, 'data': {'role': 'CUSTOMER', 'status': ApplicationStatus.APPROVED, 'admin_note': None}})
+        return Response({'success': True, 'data': None})
