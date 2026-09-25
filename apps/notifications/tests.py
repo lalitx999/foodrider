@@ -13,7 +13,7 @@ from apps.users.models import User, UserRole
 from apps.orders.models import Order, OrderStatus
 from apps.merchants.models import Merchant
 from apps.notifications.models import DeviceToken, ProcessedLineWebhookEvent
-from apps.notifications.services import build_order_status_flex_message
+from apps.notifications.services import build_order_status_flex_message, get_liff_target_url
 
 
 class NotificationApiTests(TestCase):
@@ -111,3 +111,22 @@ class NotificationApiTests(TestCase):
 
         self.assertEqual(mock_reply.call_count, 1)
         self.assertEqual(ProcessedLineWebhookEvent.objects.count(), 1)
+
+    @patch.dict(os.environ, {
+        'LINE_LIFF_ID_CUSTOMER': 'customer-id',
+        'LINE_LIFF_ID_MERCHANT': 'merchant-id',
+        'LINE_LIFF_ID_RIDER': 'rider-id',
+    }, clear=False)
+    def test_liff_urls_use_the_role_specific_id(self):
+        self.assertEqual(
+            get_liff_target_url('/customer'),
+            'https://liff.line.me/customer-id',
+        )
+        self.assertEqual(
+            get_liff_target_url('/merchant'),
+            'https://liff.line.me/merchant-id',
+        )
+        self.assertEqual(
+            get_liff_target_url('/rider'),
+            'https://liff.line.me/rider-id',
+        )

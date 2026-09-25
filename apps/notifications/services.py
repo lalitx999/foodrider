@@ -1,6 +1,5 @@
 import os
 import requests
-from urllib.parse import quote
 from apps.orders.models import Order
 from apps.notifications.models import DeviceToken
 
@@ -177,12 +176,17 @@ def reply_line_flex_message(reply_token: str, flex_contents: dict, alt_text: str
 
 def get_liff_target_url(target_path: str) -> str:
     """
-    คำนวณ LIFF URL พร้อม query parameter ?target=/path
+    คืนค่า LIFF URL ที่ตรงกับ role destination โดยเฉพาะ
     """
-    liff_id = os.environ.get('LINE_LIFF_ID', '2006835123-placeholder')
+    liff_id_environment = {
+        '/customer': 'LINE_LIFF_ID_CUSTOMER',
+        '/merchant': 'LINE_LIFF_ID_MERCHANT',
+        '/rider': 'LINE_LIFF_ID_RIDER',
+    }.get(target_path)
+    liff_id = os.environ.get(liff_id_environment, '').strip() if liff_id_environment else ''
     base_vercel = os.environ.get('VERCEL_APP_URL', 'https://foodrider.vercel.app')
-    if liff_id and liff_id != '2006835123-placeholder':
-        return f"https://liff.line.me/{liff_id}/?target={quote(target_path, safe='/')}"
+    if liff_id:
+        return f"https://liff.line.me/{liff_id}"
     return f"{base_vercel}{target_path}"
 
 
