@@ -1,6 +1,8 @@
 import os
 import requests
 import logging
+import base64
+import json
 from django.contrib.gis.geos import Point
 from django.db import transaction
 from django.utils import timezone
@@ -20,6 +22,18 @@ class AuthenticationError(Exception):
     pass
 
 
+def get_jwt_audience_for_diagnostic(id_token: str) -> str | None:
+    """อ่าน aud เพื่อ diagnostic เท่านั้น ห้ามใช้ยืนยันความน่าเชื่อถือของ token."""
+    try:
+        payload_segment = id_token.split('.')[1]
+        padded_payload = payload_segment + '=' * (-len(payload_segment) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded_payload).decode('utf-8'))
+        audience = payload.get('aud')
+        return audience if isinstance(audience, str) else None
+    except (IndexError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
 def verify_line_id_token(id_token: str) -> dict:
     """
     ยิงไปตรวจสอบ Signature ของ LINE ID Token กับ LINE Authorization Endpoint
@@ -28,6 +42,14 @@ def verify_line_id_token(id_token: str) -> dict:
     line_channel_id = os.environ.get('LINE_CHANNEL_ID')
     if not line_channel_id:
         raise AuthenticationError('ยังไม่ได้ตั้งค่า LINE_CHANNEL_ID ที่ Backend')
+
+    token_audience = get_jwt_audience_for_diagnostic(id_token)
+    logger.info(
+        'LINE channel diagnostic: token_aud=%s configured_channel_id=%s match=%s',
+        token_audience,
+        line_channel_id,
+        token_audience == line_channel_id,
+    )
     verify_url = 'https://api.line.me/oauth2/v2.1/verify'
     
     response = requests.post(verify_url, data={
