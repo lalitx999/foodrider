@@ -17,7 +17,7 @@ from apps.users.serializers import (
 )
 from apps.users.models import (
     CustomerProfile, MerchantApplication, RiderApplication, ApplicationStatus,
-    RoleChangeRequest, RoleChangeStatus,
+    OnboardingIntent, OnboardingIntentStatus, RoleChangeRequest, RoleChangeStatus,
 )
 from apps.users.services import (
     verify_line_id_token,
@@ -204,6 +204,9 @@ class CustomerRegistrationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        intent = getattr(request.user, 'onboarding_intent', None)
+        if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.CUSTOMER:
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
         if request.user.role not in {UserRole.UNASSIGNED, UserRole.CUSTOMER}:
             return Response({
                 'success': False,
@@ -226,6 +229,9 @@ class CustomerRegistrationView(APIView):
                 'delivery_longitude': data.get('delivery_longitude'),
             },
         )
+        intent.status = OnboardingIntentStatus.COMPLETED
+        intent.completed_at = timezone.now()
+        intent.save(update_fields=['status', 'completed_at', 'selected_at'])
         return Response({'success': True, 'message': 'ลงทะเบียนลูกค้าสำเร็จ'}, status=status.HTTP_200_OK)
 
 
@@ -233,6 +239,9 @@ class MerchantApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        intent = getattr(request.user, 'onboarding_intent', None)
+        if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.MERCHANT:
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
         pending_request = RoleChangeRequest.objects.filter(
             user=request.user,
             status=RoleChangeStatus.PENDING,
@@ -263,6 +272,9 @@ class MerchantApplicationView(APIView):
                 'reviewed_at': None,
             },
         )
+        intent.status = OnboardingIntentStatus.COMPLETED
+        intent.completed_at = timezone.now()
+        intent.save(update_fields=['status', 'completed_at', 'selected_at'])
         return Response({'success': True, 'data': {'status': application.status, 'role_change_request_id': role_request.id}, 'message': 'ส่งใบสมัครร้านค้าเพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
 
 
@@ -270,6 +282,9 @@ class RiderApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        intent = getattr(request.user, 'onboarding_intent', None)
+        if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.RIDER:
+            return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเริ่มลงทะเบียนจากเมนู LINE', 'details': []}, status=status.HTTP_409_CONFLICT)
         pending_request = RoleChangeRequest.objects.filter(
             user=request.user,
             status=RoleChangeStatus.PENDING,
@@ -300,6 +315,9 @@ class RiderApplicationView(APIView):
                 'reviewed_at': None,
             },
         )
+        intent.status = OnboardingIntentStatus.COMPLETED
+        intent.completed_at = timezone.now()
+        intent.save(update_fields=['status', 'completed_at', 'selected_at'])
         return Response({'success': True, 'data': {'status': application.status, 'role_change_request_id': role_request.id}, 'message': 'ส่งใบสมัครไรเดอร์เพื่อรอตรวจสอบแล้ว'}, status=status.HTTP_201_CREATED)
 
 

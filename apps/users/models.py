@@ -25,6 +25,12 @@ class RoleChangeStatus(models.TextChoices):
     CANCELLED = 'CANCELLED', 'Cancelled'
 
 
+class OnboardingIntentStatus(models.TextChoices):
+    PENDING = 'PENDING', 'Pending'
+    COMPLETED = 'COMPLETED', 'Completed'
+    CANCELLED = 'CANCELLED', 'Cancelled'
+
+
 class User(AbstractUser):
     """
     Custom User Model โดยใช้ UUID เป็น Primary Key
@@ -67,6 +73,20 @@ class CustomerProfile(models.Model):
 
     class Meta:
         db_table = 'customer_profiles'
+
+
+class OnboardingIntent(models.Model):
+    """The role selected from LINE before a first-time user opens a registration form."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='onboarding_intent')
+    selected_role = models.CharField(max_length=20, choices=[
+        UserRole.CUSTOMER, UserRole.MERCHANT, UserRole.RIDER,
+    ])
+    status = models.CharField(max_length=20, choices=OnboardingIntentStatus.choices, default=OnboardingIntentStatus.PENDING, db_index=True)
+    selected_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'onboarding_intents'
 
 
 class MerchantApplication(models.Model):

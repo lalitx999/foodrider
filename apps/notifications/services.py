@@ -199,6 +199,16 @@ def build_onboarding_start_flex(role: str) -> dict:
     return {'type': 'bubble', 'body': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'text', 'text': title, 'weight': 'bold', 'size': 'lg'}, {'type': 'text', 'text': 'เปิดแบบฟอร์มเพื่อกรอกข้อมูลและส่งคำขอ', 'wrap': True, 'size': 'sm', 'margin': 'md'}]}, 'footer': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'button', 'style': 'primary', 'color': color, 'action': {'type': 'uri', 'label': 'เปิดแบบฟอร์ม', 'uri': get_liff_target_url(path)}}]}}
 
 
+def build_role_entry_flex(role: str) -> dict:
+    options = {
+        'CUSTOMER': ('เข้าสู่ระบบลูกค้า', '/customer', '#689D4B'),
+        'MERCHANT': ('เข้าสู่ระบบร้านค้า', '/merchant', '#689D4B'),
+        'RIDER': ('เข้าสู่ระบบไรเดอร์', '/rider', '#2563EB'),
+    }
+    label, path, color = options[role]
+    return {'type': 'bubble', 'body': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'text', 'text': 'ยินดีต้อนรับกลับมา', 'weight': 'bold', 'size': 'lg'}, {'type': 'text', 'text': 'เปิดระบบตามสิทธิ์ของคุณ', 'size': 'sm', 'margin': 'md'}]}, 'footer': {'type': 'box', 'layout': 'vertical', 'contents': [{'type': 'button', 'style': 'primary', 'color': color, 'action': {'type': 'uri', 'label': label, 'uri': get_liff_target_url(path)}}]}}
+
+
 def build_customer_command_flex() -> dict:
     """
     คำสั่ง 'สั่งอาหาร': ตอบกลับการ์ดสั่งซื้อสินค้าพัทยา

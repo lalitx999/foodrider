@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 
-from apps.users.models import CustomerProfile, MerchantApplication, RiderApplication, RoleChangeRequest, User
+from apps.users.models import CustomerProfile, MerchantApplication, OnboardingIntent, RiderApplication, RoleChangeRequest, User
 from apps.users.services import RoleChangeApprovalError, approve_role_change_request, reject_role_change_request
 from apps.users.bank_encryption import BankDataEncryptionError, mask_encrypted_bank_value
 
@@ -9,6 +9,14 @@ from apps.users.bank_encryption import BankDataEncryptionError, mask_encrypted_b
 class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'default_delivery_address', 'registered_at')
     search_fields = ('user__display_name', 'user__line_user_id', 'user__phone_number')
+
+
+@admin.register(OnboardingIntent)
+class OnboardingIntentAdmin(admin.ModelAdmin):
+    list_display = ('user', 'selected_role', 'status', 'selected_at', 'completed_at')
+    list_filter = ('selected_role', 'status')
+    search_fields = ('user__display_name', 'user__line_user_id')
+    readonly_fields = ('user', 'selected_role', 'status', 'selected_at', 'completed_at')
 
 
 @admin.register(MerchantApplication)
