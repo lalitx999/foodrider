@@ -187,27 +187,168 @@ class MenuItemToggleView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+import json
+
+class CategoryManageView(APIView):
+    permission_classes = [HasMerchantProfile]
+
+    def get(self, request):
+        merchant = request.user.merchant_profile
+        categories = Category.objects.filter(merchant=merchant).order_by('sort_order', 'name')
+        data = [{'id': str(cat.id), 'name': cat.name, 'sort_order': cat.sort_order} for cat in categories]
+        return Response({'success': True, 'data': data}, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        name = request.data.get('name', '').strip()
+        if not name:
+            return Response({'success': False, 'message': 'กรุณาระบุชื่อหมวดหมู่'}, status=status.HTTP_400_BAD_REQUEST)
+        merchant = request.user.merchant_profile
+        category, created = Category.objects.get_or_create(
+            merchant=merchant,
+            name=name,
+            defaults={'sort_order': Category.objects.filter(merchant=merchant).count()}
+        )
+        return Response({'success': True, 'data': {'id': str(category.id), 'name': category.name}, 'message': 'สร้างหมวดหมู่สำเร็จ'}, status=status.HTTP_201_CREATED)
+
+
 class MenuItemCreateView(APIView):
     permission_classes = [HasMerchantProfile]
 
     @transaction.atomic
     def post(self, request):
-        serializer = CreateMenuItemSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+        merchant = request.user.merchant_profile
+        data = request.data.copy()
+
+        name = data.get('name', '').strip()
+        price = data.get('price')
+
+        if not name or not price:
+            return Response({'success': False, 'message': 'กรุณาระบุชื่อเมนูและราคาให้ครบถ้วน'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Handle category
         category = None
-        if data.get('category_id'):
-            category = Category.objects.filter(id=data['category_id'], merchant=request.user.merchant_profile).first()
-            if not category:
-                return Response({'success': False, 'error_code': 'CATEGORY_NOT_FOUND', 'message': 'ไม่พบหมวดหมู่ของร้านนี้', 'details': []}, status=status.HTTP_404_NOT_FOUND)
-        else:
+        category_id = data.get('category_id')
+        category_name = data.get('category_name')
+
+        if category_id:
+            category = Category.objects.filter(id=category_id, merchant=merchant).first()
+        elif category_name:
             category, _ = Category.objects.get_or_create(
-                merchant=request.user.merchant_profile,
-                name='เมนูทั่วไป',
-                defaults={'sort_order': 0},
+                merchant=merchant,
+                name=category_name.strip(),
+                defaults={'sort_order': Category.objects.filter(merchant=merchant).count()}
             )
-        options = data.pop('options', [])
-        data.pop('category_id', None)
-        item = MenuItem.objects.create(merchant=request.user.merchant_profile, category=category, **data)
-        MenuOption.objects.bulk_create([MenuOption(menu_item=item, **option) for option in options])
-        return Response({'success': True, 'data': MenuItemSerializer(item).data, 'message': 'เพิ่มเมนูเรียบร้อยแล้ว'}, status=status.HTTP_201_CREATED)
+
+        if not category:
+            category, _ = Category.objects.get_or_create(
+                merchant=merchant,
+                name='เมนูทั่วไป',
+                defaults={'sort_order': 0}
+            )
+
+        # Handle options (toppings)
+        raw_options = data.get('options', [])
+        if isinstance(raw_options, str):
+            try:
+                raw_options = json.loads(raw_options)
+            except Exception:
+                raw_options = []
+
+        item = MenuItem.objects.create(
+            merchant=merchant,
+            category=category,
+            name=name,
+            description=data.get('description', ''),
+            price=price,
+            image_url=data.get('image_url', ''),
+            image=request.FILES.get('image') if 'image' in request.FILES else None
+        )
+
+        for opt in raw_options:
+            if isinstance(opt, dict) and opt.get('name'):
+                MenuOption.objects.create(
+                    menu_item=item,
+                    name=opt['name'].strip(),
+                    extra_price=opt.get('extra_price', 0)
+                )
+
+        return Response({
+            'success': True,
+            'data': MenuItemSerializer(item, context={'request': request}).data,
+            'message': 'เพิ่มเมนูอาหารเรียบร้อยแล้ว'
+        }, status=status.HTTP_201_CREATED)
+
+
+class MenuItemDetailView(APIView):
+    permission_classes = [HasMerchantProfile]
+
+    @transaction.atomic
+    def patch(self, request, item_id):
+        merchant = request.user.merchant_profile
+        item = MenuItem.objects.filter(id=item_id, merchant=merchant).first()
+        if not item:
+            return Response({'success': False, 'message': 'ไม่พบเมนูที่ระบุ'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data
+        if 'name' in data:
+            item.name = data['name'].strip()
+        if 'price' in data:
+            item.price = data['price']
+        if 'description' in data:
+            item.description = data['description']
+        if 'image_url' in data:
+            item.image_url = data['image_url']
+        if 'image' in request.FILES:
+            item.image = request.FILES['image']
+        if 'is_available' in data:
+            item.is_available = str(data['is_available']).lower() in ['true', '1']
+
+        category_id = data.get('category_id')
+        category_name = data.get('category_name')
+        if category_id:
+            category = Category.objects.filter(id=category_id, merchant=merchant).first()
+            if category:
+                item.category = category
+        elif category_name:
+            category, _ = Category.objects.get_or_create(
+                merchant=merchant,
+                name=category_name.strip(),
+                defaults={'sort_order': Category.objects.filter(merchant=merchant).count()}
+            )
+            item.category = category
+
+        item.save()
+
+        # Update options if provided
+        if 'options' in data:
+            raw_options = data['options']
+            if isinstance(raw_options, str):
+                try:
+                    raw_options = json.loads(raw_options)
+                except Exception:
+                    raw_options = None
+
+            if isinstance(raw_options, list):
+                item.options.all().delete()
+                for opt in raw_options:
+                    if isinstance(opt, dict) and opt.get('name'):
+                        MenuOption.objects.create(
+                            menu_item=item,
+                            name=opt['name'].strip(),
+                            extra_price=opt.get('extra_price', 0)
+                        )
+
+        return Response({
+            'success': True,
+            'data': MenuItemSerializer(item, context={'request': request}).data,
+            'message': 'อัปเดตเมนูเรียบร้อยแล้ว'
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, item_id):
+        merchant = request.user.merchant_profile
+        item = MenuItem.objects.filter(id=item_id, merchant=merchant).first()
+        if not item:
+            return Response({'success': False, 'message': 'ไม่พบเมนูที่ระบุ'}, status=status.HTTP_404_NOT_FOUND)
+
+        item.delete()
+        return Response({'success': True, 'message': 'ลบเมนูเรียบร้อยแล้ว'}, status=status.HTTP_200_OK)

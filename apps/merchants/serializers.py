@@ -10,10 +10,19 @@ class MenuOptionSerializer(serializers.ModelSerializer):
 
 class MenuItemSerializer(serializers.ModelSerializer):
     options = MenuOptionSerializer(many=True, read_only=True)
+    image_url = serializers.SerializerMethodField()
+    category_name = serializers.CharField(source='category.name', read_only=True, default='ไม่มีหมวดหมู่')
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        url = obj.image.url if obj.image else obj.image_url
+        if not url:
+            return None
+        return request.build_absolute_uri(url) if request and url.startswith('/') else url
 
     class Meta:
         model = MenuItem
-        fields = ['id', 'name', 'description', 'price', 'image_url', 'is_available', 'options']
+        fields = ['id', 'name', 'description', 'price', 'image_url', 'is_available', 'category', 'category_name', 'options']
 
 
 class CategoryWithMenuSerializer(serializers.ModelSerializer):

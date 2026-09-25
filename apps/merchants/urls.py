@@ -6,6 +6,8 @@ from apps.merchants.views import (
     MenuItemToggleView,
     MerchantDashboardView,
     MenuItemCreateView,
+    MenuItemDetailView,
+    CategoryManageView,
 )
 
 urlpatterns = [
@@ -13,6 +15,8 @@ urlpatterns = [
     path('merchants/<uuid:merchant_id>/menu/', MerchantMenuView.as_view(), name='merchant-menu'),
     path('merchant/store-status/', StoreStatusToggleView.as_view(), name='merchant-store-status'),
     path('merchant/dashboard/', MerchantDashboardView.as_view(), name='merchant-dashboard'),
-    path('merchant/menu/<uuid:item_id>/toggle/', MenuItemToggleView.as_view(), name='merchant-menu-toggle'),
+    path('merchant/categories/', CategoryManageView.as_view(), name='merchant-categories'),
     path('merchant/menu/', MenuItemCreateView.as_view(), name='merchant-menu-create'),
+    path('merchant/menu/<uuid:item_id>/', MenuItemDetailView.as_view(), name='merchant-menu-detail'),
+    path('merchant/menu/<uuid:item_id>/toggle/', MenuItemToggleView.as_view(), name='merchant-menu-toggle'),
 ]
