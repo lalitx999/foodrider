@@ -340,18 +340,57 @@ class RegistrationStatusView(APIView):
 
     def get(self, request):
         role_request = RoleChangeRequest.objects.filter(user=request.user).order_by('-requested_at').first()
+
+        details = {}
+        if hasattr(request.user, 'merchant_application'):
+            app = request.user.merchant_application
+            details = {
+                'title_name': app.store_name,
+                'phone_number': app.phone_number,
+                'address': app.address,
+                'google_maps_url': app.google_maps_url,
+                'bank_name': app.bank_name,
+                'bank_account_name': app.bank_account_name,
+                'bank_account_number': app.bank_account_number,
+                'submitted_at': app.submitted_at,
+            }
+        elif hasattr(request.user, 'rider_application'):
+            app = request.user.rider_application
+            details = {
+                'title_name': app.full_name,
+                'phone_number': app.phone_number,
+                'vehicle_plate': app.vehicle_plate,
+                'submitted_at': app.submitted_at,
+            }
+
         if role_request:
             return Response({'success': True, 'data': {
                 'role': role_request.requested_role,
                 'status': role_request.status,
                 'admin_note': role_request.admin_note,
+                'details': details,
             }})
         if hasattr(request.user, 'merchant_application'):
-            application = request.user.merchant_application
-            return Response({'success': True, 'data': {'role': 'MERCHANT', 'status': application.status, 'admin_note': application.admin_note}})
+            app = request.user.merchant_application
+            return Response({'success': True, 'data': {
+                'role': 'MERCHANT',
+                'status': app.status,
+                'admin_note': app.admin_note,
+                'details': details,
+            }})
         if hasattr(request.user, 'rider_application'):
-            application = request.user.rider_application
-            return Response({'success': True, 'data': {'role': 'RIDER', 'status': application.status, 'admin_note': application.admin_note}})
+            app = request.user.rider_application
+            return Response({'success': True, 'data': {
+                'role': 'RIDER',
+                'status': app.status,
+                'admin_note': app.admin_note,
+                'details': details,
+            }})
         if hasattr(request.user, 'customer_profile'):
-            return Response({'success': True, 'data': {'role': 'CUSTOMER', 'status': ApplicationStatus.APPROVED, 'admin_note': None}})
+            return Response({'success': True, 'data': {
+                'role': 'CUSTOMER',
+                'status': ApplicationStatus.APPROVED,
+                'admin_note': None,
+                'details': {},
+            }})
         return Response({'success': True, 'data': None})
