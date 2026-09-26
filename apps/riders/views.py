@@ -104,6 +104,36 @@ class RiderWalletView(APIView):
         return Response({'success': True, 'data': {'balance': profile.wallet_balance}})
 
 
+class RiderProfileDetailView(APIView):
+    """
+    GET /api/v1/rider/profile/
+    ดึงข้อมูลโปรไฟล์ไรเดอร์ ยานพาหนะ พิกัด GPS และกระเป๋าเงิน
+    """
+    permission_classes = [HasRiderProfile]
+
+    def get(self, request):
+        user = request.user
+        profile = getattr(user, 'rider_profile', None)
+        app = getattr(user, 'rider_application', None)
+
+        data = {
+            'user_id': str(user.id),
+            'display_name': user.display_name,
+            'email': user.email,
+            'phone_number': user.phone_number,
+            'picture_url': user.picture_url if user.picture_url else None,
+            'vehicle_plate': profile.vehicle_plate if (profile and profile.vehicle_plate) else (app.vehicle_plate if app else '—'),
+            'vehicle_type': app.vehicle_type if app else 'MOTORCYCLE',
+            'is_online': profile.is_online if profile else False,
+            'wallet_balance': float(profile.wallet_balance) if profile else 0.0,
+            'current_latitude': float(profile.current_latitude) if (profile and profile.current_latitude is not None) else None,
+            'current_longitude': float(profile.current_longitude) if (profile and profile.current_longitude is not None) else None,
+            'application_status': app.status if app else 'APPROVED',
+            'driver_license_number': app.driver_license_number if app else '—',
+        }
+        return Response({'success': True, 'data': data, 'message': 'ดึงข้อมูลโปรไฟล์ไรเดอร์สำเร็จ'})
+
+
 class ClaimJobView(APIView):
     """
     POST /api/v1/rider/orders/:id/claim/

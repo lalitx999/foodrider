@@ -7,10 +7,12 @@ from apps.riders.views import (
     MerchantOrderReadyView,
     RiderJobHistoryView,
     RiderWalletView,
+    RiderProfileDetailView,
 )
 
 urlpatterns = [
     path('rider/status/', RiderStatusToggleView.as_view(), name='rider-status'),
+    path('rider/profile/', RiderProfileDetailView.as_view(), name='rider-profile'),
     path('rider/orders/available/', AvailableJobsListView.as_view(), name='rider-jobs-available'),
     path('rider/orders/history/', RiderJobHistoryView.as_view(), name='rider-jobs-history'),
     path('rider/wallet/', RiderWalletView.as_view(), name='rider-wallet'),
