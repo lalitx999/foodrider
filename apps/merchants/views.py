@@ -42,14 +42,6 @@ class MerchantListView(APIView):
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # หากในฐานข้อมูลยังไม่มีร้านค้าเลย ให้ทำการ Seed ร้านค้าพัทยาอัตโนมัติ
-        if Merchant.objects.count() == 0:
-            try:
-                from apps.merchants.management.commands.seed_merchants import seed_pattaya_merchants
-                seed_pattaya_merchants()
-            except Exception:
-                pass
-
         merchants = get_nearby_open_merchants(lat, lng, radius_km=radius_km)
         serializer = MerchantListSerializer(merchants, many=True, context={'request': request})
 
