@@ -18,7 +18,7 @@ from django.db import transaction
 
 class MerchantListView(APIView):
     """
-    GET /api/v1/merchants/?lat=xxx&lng=xxx
+    GET /api/v1/merchants/?lat=xxx&lng=xxx&radius=10
     ดึงรายการร้านค้าที่เปิดอยู่ เรียงลำดับตามระยะทางที่ใกล้ที่สุดผ่าน PostGIS
     """
     permission_classes = [AllowAny]
@@ -26,10 +26,12 @@ class MerchantListView(APIView):
     def get(self, request):
         lat_str = request.query_params.get('lat', '12.9276')
         lng_str = request.query_params.get('lng', '100.8771')
+        radius_str = request.query_params.get('radius', '10')
 
         try:
             lat = float(lat_str) if lat_str else 12.9276
             lng = float(lng_str) if lng_str else 100.8771
+            radius_km = float(radius_str) if radius_str else 10.0
             if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
                 raise ValueError("พิกัดละติจูด/ลองจิจูดไม่อยู่ในขอบเขตที่ถูกต้อง")
         except ValueError as e:
@@ -40,14 +42,25 @@ class MerchantListView(APIView):
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        # หากในฐานข้อมูลยังไม่มีร้านค้าเลย ให้ทำการ Seed ร้านค้าพัทยาอัตโนมัติ
+        if Merchant.objects.count() == 0:
+            try:
+                from apps.merchants.management.commands.seed_merchants import seed_pattaya_merchants
+                seed_pattaya_merchants()
+            except Exception:
+                pass
 
-        merchants = get_nearby_open_merchants(lat, lng)
+        merchants = get_nearby_open_merchants(lat, lng, radius_km=radius_km)
         serializer = MerchantListSerializer(merchants, many=True, context={'request': request})
 
         return Response({
             'success': True,
             'data': serializer.data,
-            'message': f'ดึงรายการร้านค้าที่เปิดบริการ {len(merchants)} ร้านสำเร็จ'
+            'message': f'ดึงรายการร้านค้า {len(merchants)} ร้านสำเร็จ',
+            'meta': {
+                'radius_km': radius_km,
+                'total': len(merchants),
+            }
         }, status=status.HTTP_200_OK)
 
 

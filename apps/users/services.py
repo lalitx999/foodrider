@@ -86,6 +86,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
                 'latitude': lat,
                 'longitude': lng,
                 'location': Point(float(lng), float(lat), srid=4326),
+                'is_open': True,
                 'bank_account_name': application.bank_account_name or 'บัญชีร้านค้า',
                 'bank_account_number': application.bank_account_number or '0000000000',
                 'bank_name': application.bank_name or 'พร้อมเพย์',

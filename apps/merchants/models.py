@@ -31,6 +31,12 @@ class Merchant(models.Model):
         db_table = 'merchants'
         ordering = ['-created_at']
 
+    def save(self, *args, **kwargs):
+        if (self.location is None or self.location == '') and self.latitude is not None and self.longitude is not None:
+            from django.contrib.gis.geos import Point
+            self.location = Point(float(self.longitude), float(self.latitude), srid=4326)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.name} (Open: {self.is_open})"
 
