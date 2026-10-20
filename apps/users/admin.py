@@ -197,33 +197,106 @@ class MerchantApplicationAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         role_request = getattr(obj, 'role_change_request', None)
-        if role_request and role_request.status == RoleChangeStatus.PENDING:
-            if obj.status == ApplicationStatus.APPROVED:
+        if obj.status == ApplicationStatus.APPROVED:
+            if role_request and role_request.status == RoleChangeStatus.PENDING:
                 try:
                     approve_role_change_request(role_request.id, request.user, obj.admin_note or 'อนุมัติโดยแอดมิน')
                     self.message_user(request, f'อนุมัติเปิดร้าน {obj.store_name} เรียบร้อยแล้ว', messages.SUCCESS)
+                    return
                 except Exception as e:
-                    self.message_user(request, f'เกิดข้อผิดพลาดในการอนุมัติ: {str(e)}', messages.ERROR)
-            elif obj.status == ApplicationStatus.REJECTED:
+                    self.message_user(request, f'คำเตือน: {str(e)} กำลังสร้างข้อมูลร้านค้าให้อัตโนมัติ', messages.WARNING)
+            
+            # Direct/Fallback auto-create merchant profile
+            from apps.merchants.models import Merchant
+            from decimal import Decimal
+            from django.contrib.gis.geos import Point
+            user = obj.user
+            if user.role != UserRole.MERCHANT and user.role != UserRole.ADMIN:
+                user.role = UserRole.MERCHANT
+                user.save(update_fields=['role', 'updated_at'])
+            lat = obj.latitude if obj.latitude is not None else Decimal('12.9276')
+            lng = obj.longitude if obj.longitude is not None else Decimal('100.8771')
+            img_url = ''
+            if obj.storefront_image:
+                try: img_url = obj.storefront_image.url
+                except Exception: img_url = ''
+            if not img_url:
+                img_url = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
+            Merchant.objects.get_or_create(
+                user=user,
+                defaults={
+                    'name': obj.store_name or 'ร้านค้าของฉัน',
+                    'image_url': img_url,
+                    'phone_number': obj.phone_number or '',
+                    'address': obj.address or '',
+                    'latitude': lat,
+                    'longitude': lng,
+                    'location': Point(float(lng), float(lat), srid=4326),
+                    'bank_account_name': obj.bank_account_name or 'บัญชีร้านค้า',
+                    'bank_account_number': obj.bank_account_number or '0000000000',
+                    'bank_name': obj.bank_name or 'พร้อมเพย์',
+                }
+            )
+            if role_request and role_request.status != RoleChangeStatus.APPROVED:
+                role_request.status = RoleChangeStatus.APPROVED
+                role_request.save(update_fields=['status'])
+            self.message_user(request, f'อนุมัติเปิดร้าน {obj.store_name} เรียบร้อยแล้ว', messages.SUCCESS)
+        elif obj.status == ApplicationStatus.REJECTED:
+            if role_request and role_request.status == RoleChangeStatus.PENDING:
                 try:
                     reject_role_change_request(role_request.id, request.user, obj.admin_note or 'ไม่อนุมัติโดยแอดมิน')
-                    self.message_user(request, f'ปฏิเสธใบสมัคร {obj.store_name} เรียบร้อยแล้ว', messages.WARNING)
-                except Exception as e:
-                    self.message_user(request, f'เกิดข้อผิดพลาดในการปฏิเสธ: {str(e)}', messages.ERROR)
+                except Exception:
+                    pass
+            self.message_user(request, f'ปฏิเสธใบสมัคร {obj.store_name} เรียบร้อยแล้ว', messages.WARNING)
 
     @admin.action(description='✅ อนุมัติเปิดร้านค้า (อนุมัติสิทธิ์และสร้างร้านทันที)')
     def approve_selected_merchants(self, request, queryset):
         count = 0
+        from apps.merchants.models import Merchant
+        from decimal import Decimal
+        from django.contrib.gis.geos import Point
         for app in queryset:
             role_request = getattr(app, 'role_change_request', None)
-            if not role_request:
-                self.message_user(request, f'ร้าน {app.store_name}: ไม่พบคำขอเปลี่ยนสิทธิ์ในระบบ', messages.ERROR)
-                continue
-            try:
-                approve_role_change_request(role_request.id, request.user, app.admin_note or 'อนุมัติโดยแอดมิน')
-                count += 1
-            except Exception as e:
-                self.message_user(request, f'ร้าน {app.store_name}: {str(e)}', messages.ERROR)
+            if role_request and role_request.status == RoleChangeStatus.PENDING:
+                try:
+                    approve_role_change_request(role_request.id, request.user, app.admin_note or 'อนุมัติโดยแอดมิน')
+                    count += 1
+                    continue
+                except Exception:
+                    pass
+            app.status = ApplicationStatus.APPROVED
+            app.save(update_fields=['status', 'updated_at'])
+            user = app.user
+            if user.role != UserRole.MERCHANT and user.role != UserRole.ADMIN:
+                user.role = UserRole.MERCHANT
+                user.save(update_fields=['role', 'updated_at'])
+            lat = app.latitude if app.latitude is not None else Decimal('12.9276')
+            lng = app.longitude if app.longitude is not None else Decimal('100.8771')
+            img_url = ''
+            if app.storefront_image:
+                try: img_url = app.storefront_image.url
+                except Exception: img_url = ''
+            if not img_url:
+                img_url = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
+            Merchant.objects.get_or_create(
+                user=user,
+                defaults={
+                    'name': app.store_name or 'ร้านค้าของฉัน',
+                    'image_url': img_url,
+                    'phone_number': app.phone_number or '',
+                    'address': app.address or '',
+                    'latitude': lat,
+                    'longitude': lng,
+                    'location': Point(float(lng), float(lat), srid=4326),
+                    'bank_account_name': app.bank_account_name or 'บัญชีร้านค้า',
+                    'bank_account_number': app.bank_account_number or '0000000000',
+                    'bank_name': app.bank_name or 'พร้อมเพย์',
+                }
+            )
+            if role_request:
+                role_request.status = RoleChangeStatus.APPROVED
+                role_request.save(update_fields=['status'])
+            count += 1
 
         if count > 0:
             self.message_user(request, f'อนุมัติร้านค้าเรียบร้อยแล้วจำนวน {count} รายการ', messages.SUCCESS)

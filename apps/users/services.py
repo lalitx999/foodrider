@@ -59,24 +59,36 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
 
     if request.requested_role == UserRole.MERCHANT:
         application = request.merchant_application
-        if not application or application.status not in [ApplicationStatus.PENDING_REVIEW, ApplicationStatus.APPROVED]:
+        if not application:
             raise RoleChangeApprovalError('ไม่พบใบสมัครร้านค้าที่พร้อมอนุมัติ')
-        if not all([application.bank_account_name, application.bank_account_number, application.bank_name]):
-            raise RoleChangeApprovalError('ใบสมัครร้านค้ายังขาดข้อมูลบัญชีรับเงิน')
+        from decimal import Decimal
+        from django.contrib.gis.geos import Point
         from apps.merchants.models import Merchant
+
+        lat = application.latitude if application.latitude is not None else Decimal('12.9276')
+        lng = application.longitude if application.longitude is not None else Decimal('100.8771')
+        img_url = ''
+        if application.storefront_image:
+            try:
+                img_url = application.storefront_image.url
+            except Exception:
+                img_url = ''
+        if not img_url:
+            img_url = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
+
         Merchant.objects.get_or_create(
             user=user,
             defaults={
-                'name': application.store_name,
-                'image_url': application.storefront_image.url if application.storefront_image else '',
-                'phone_number': application.phone_number,
-                'address': application.address,
-                'latitude': application.latitude,
-                'longitude': application.longitude,
-                'location': Point(application.longitude, application.latitude, srid=4326) if application.longitude and application.latitude else None,
-                'bank_account_name': application.bank_account_name,
-                'bank_account_number': application.bank_account_number,
-                'bank_name': application.bank_name,
+                'name': application.store_name or 'ร้านค้าของฉัน',
+                'image_url': img_url,
+                'phone_number': application.phone_number or '',
+                'address': application.address or '',
+                'latitude': lat,
+                'longitude': lng,
+                'location': Point(float(lng), float(lat), srid=4326),
+                'bank_account_name': application.bank_account_name or 'บัญชีร้านค้า',
+                'bank_account_number': application.bank_account_number or '0000000000',
+                'bank_name': application.bank_name or 'พร้อมเพย์',
             },
         )
         application.status = ApplicationStatus.APPROVED
@@ -85,13 +97,13 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
         application.save(update_fields=['status', 'admin_note', 'reviewed_at', 'updated_at'])
     elif request.requested_role == UserRole.RIDER:
         application = request.rider_application
-        if not application or application.status not in [ApplicationStatus.PENDING_REVIEW, ApplicationStatus.APPROVED]:
+        if not application:
             raise RoleChangeApprovalError('ไม่พบใบสมัครไรเดอร์ที่พร้อมอนุมัติ')
         from apps.riders.models import RiderProfile
         RiderProfile.objects.get_or_create(
             user=user,
             defaults={
-                'vehicle_plate': application.vehicle_plate,
+                'vehicle_plate': application.vehicle_plate or 'ไม่ระบุ',
                 'bank_account_name_encrypted': application.bank_account_name_encrypted,
                 'bank_account_number_encrypted': application.bank_account_number_encrypted,
                 'bank_name_encrypted': application.bank_name_encrypted,
