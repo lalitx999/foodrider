@@ -45,9 +45,29 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     items = OrderItemDetailSerializer(many=True, read_only=True)
     merchant_name = serializers.CharField(source='merchant.name', read_only=True)
     customer_name = serializers.CharField(source='customer.display_name', read_only=True)
+    customer_phone = serializers.CharField(source='customer.phone_number', read_only=True, default=None)
     rider_name = serializers.CharField(source='rider.display_name', read_only=True, default=None)
     rider_phone = serializers.CharField(source='rider.phone_number', read_only=True, default=None)
     rider_vehicle_plate = serializers.CharField(source='rider.rider_profile.vehicle_plate', read_only=True, default=None)
+    slip_url = serializers.SerializerMethodField()
+
+    def get_slip_url(self, obj):
+        latest_slip = obj.slip_transactions.filter(is_verified=True).order_by('-verified_at').first()
+        if not latest_slip:
+            latest_slip = obj.slip_transactions.order_by('-verified_at').first()
+        if latest_slip and latest_slip.slip_image_url:
+            url = latest_slip.slip_image_url
+            if url.startswith(('http://', 'https://')):
+                return url
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(url)
+            from django.conf import settings
+            base_url = getattr(settings, 'BACKEND_URL', 'https://foodrider.tanchonhomserverxxx.online').rstrip('/')
+            if not url.startswith('/'):
+                url = '/' + url
+            return f"{base_url}{url}"
+        return None
 
     class Meta:
         model = Order
@@ -59,6 +79,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'merchant_name',
             'customer_id',
             'customer_name',
+            'customer_phone',
             'rider_id',
             'rider_name',
             'rider_phone',
@@ -71,6 +92,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'delivery_longitude',
             'delivery_distance_km',
             'note_to_merchant',
+            'slip_url',
             'items',
             'created_at',
             'updated_at'

@@ -314,6 +314,7 @@ class OrderStatusUpdateView(APIView):
             }, status=status.HTTP_404_NOT_FOUND)
 
         allowed_transitions = {
+            OrderStatus.PENDING_PAYMENT: {OrderStatus.PAID, OrderStatus.PREPARING, OrderStatus.CANCELLED},
             OrderStatus.PAID: {OrderStatus.PREPARING, OrderStatus.CANCELLED},
             OrderStatus.PREPARING: {OrderStatus.READY_FOR_PICKUP, OrderStatus.CANCELLED},
         }
