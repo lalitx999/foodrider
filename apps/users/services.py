@@ -47,7 +47,7 @@ class RoleChangeApprovalError(Exception):
 @transaction.atomic
 def approve_role_change_request(request_id, reviewer: User, admin_note: str = '') -> RoleChangeRequest:
     """Create the required role profile and switch the user's sole active role atomically."""
-    request = RoleChangeRequest.objects.select_for_update().select_related(
+    request = RoleChangeRequest.objects.select_for_update(of=('self',)).select_related(
         'user', 'merchant_application', 'rider_application'
     ).get(id=request_id)
     user = User.objects.select_for_update().get(id=request.user_id)
@@ -124,7 +124,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
 def reject_role_change_request(request_id, reviewer: User, admin_note: str) -> RoleChangeRequest:
     if not admin_note.strip():
         raise RoleChangeApprovalError('กรุณาระบุเหตุผลการไม่อนุมัติ')
-    request = RoleChangeRequest.objects.select_for_update().select_related(
+    request = RoleChangeRequest.objects.select_for_update(of=('self',)).select_related(
         'merchant_application', 'rider_application'
     ).get(id=request_id)
     if request.status != RoleChangeStatus.PENDING:

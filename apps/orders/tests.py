@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.contrib.gis.geos import Point
 from rest_framework.test import APIClient
 from rest_framework import status
-from apps.users.models import User, UserRole
+from apps.users.models import User, UserRole, CustomerProfile
 from apps.merchants.models import Merchant, Category, MenuItem, MenuOption
 from apps.orders.models import Order, OrderItem, OrderStatus
 from apps.payments.models import SlipTransaction
@@ -19,6 +19,10 @@ class OrderApiTests(TestCase):
             display_name='Somchai Customer',
             email='customer@example.com',
             role=UserRole.CUSTOMER
+        )
+        self.customer_profile = CustomerProfile.objects.create(
+            user=self.customer,
+            default_delivery_address='ถนนนิมมาน เชียงใหม่'
         )
         self.merchant_user = User.objects.create(
             display_name='Somsee Merchant',

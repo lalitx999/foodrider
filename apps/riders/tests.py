@@ -1,4 +1,7 @@
+import io
 from decimal import Decimal
+from PIL import Image
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.gis.geos import Point
@@ -24,6 +27,12 @@ class RiderApiTests(TestCase):
         self.rider_profile_1 = RiderProfile.objects.create(
             user=self.rider_user_1,
             vehicle_plate='1กข-9999',
+            is_online=True,
+            wallet_balance=Decimal('0.00')
+        )
+        self.rider_profile_2 = RiderProfile.objects.create(
+            user=self.rider_user_2,
+            vehicle_plate='2กข-8888',
             is_online=True,
             wallet_balance=Decimal('0.00')
         )
@@ -113,9 +122,21 @@ class RiderApiTests(TestCase):
         url = reverse('rider-job-complete', kwargs={'order_id': self.order.id})
         self.client.force_authenticate(user=self.rider_user_1)
 
+        proof_io = io.BytesIO()
+        Image.new('RGB', (10, 10), color='green').save(proof_io, 'JPEG')
+        proof_io.seek(0)
+        proof_file = SimpleUploadedFile('proof.jpg', proof_io.read(), content_type='image/jpeg')
+
+        sig_io = io.BytesIO()
+        Image.new('RGB', (10, 10), color='black').save(sig_io, 'JPEG')
+        sig_io.seek(0)
+        sig_file = SimpleUploadedFile('sig.jpg', sig_io.read(), content_type='image/jpeg')
+
         response = self.client.post(url, {
-            'proof_image_url': 'https://example.com/delivery_proof.jpg'
-        }, format='json')
+            'proof_image': proof_file,
+            'signature_image': sig_file,
+            'recipient_confirmed': True,
+        }, format='multipart')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['success'])

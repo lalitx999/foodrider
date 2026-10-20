@@ -39,7 +39,13 @@ class EmailRegistrationView(APIView):
 
     def post(self, request):
         serializer = EmailRegistrationSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'error_code': 'INVALID_PAYLOAD',
+                'message': 'ข้อมูล Payload ไม่ถูกต้อง',
+                'details': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
         user = register_email_user(
             display_name=serializer.validated_data['display_name'],
             email=serializer.validated_data['email'],

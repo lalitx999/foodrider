@@ -12,3 +12,5 @@ gunicorn>=21.2.0
 cryptography>=42.0.0
 firebase-admin>=6.6.0
 qrcode[pil]>=7.4.2
+celery>=5.4.0
+redis>=5.0.0

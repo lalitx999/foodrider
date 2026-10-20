@@ -32,7 +32,7 @@ class AuthenticationApiTests(TestCase):
 
     def test_email_register_creates_unassigned_user(self):
         response = self.client.post(self.register_url, {'display_name': 'Somchai', 'email': 'somchai@example.com', 'password': 'safe-password-123', 'password_confirm': 'safe-password-123'}, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(response.data['success'])
         self.assertIn('access', response.data['data'])
         self.assertIn('refresh', response.data['data'])

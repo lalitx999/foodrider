@@ -4,7 +4,12 @@
 firebase-config.json
 *.json
 
-# Python
+# Python & Build
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 venv/
+*.sqlite3
+media/
+staticfiles/
