@@ -19,7 +19,7 @@ class Merchant(models.Model):
     latitude = models.DecimalField(max_digits=10, decimal_places=7)
     longitude = models.DecimalField(max_digits=10, decimal_places=7)
     location = gis_models.PointField(srid=4326, null=True, blank=True, spatial_index=True)
-    is_open = models.BooleanField(default=False, db_index=True)
+    is_open = models.BooleanField(default=True, db_index=True)
     gp_rate = models.DecimalField(max_digits=5, decimal_places=2, default=15.00)
     bank_account_name = models.CharField(max_length=255)
     bank_account_number = models.CharField(max_length=50)

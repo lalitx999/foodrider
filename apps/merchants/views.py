@@ -74,7 +74,7 @@ class MerchantMenuView(APIView):
             }, status=status.HTTP_404_NOT_FOUND)
 
         categories = get_merchant_full_menu(merchant_id)
-        serializer = CategoryWithMenuSerializer(categories, many=True)
+        serializer = CategoryWithMenuSerializer(categories, many=True, context={'request': request})
 
         return Response({
             'success': True,
@@ -134,13 +134,12 @@ class MerchantDashboardView(APIView):
     def get(self, request):
         merchant = request.user.merchant_profile
         menu_items = merchant.menu_items.select_related('category').order_by('category__sort_order', 'name')
+        item_serializer = MenuItemSerializer(menu_items, many=True, context={'request': request})
         return Response({'success': True, 'data': {
-            'id': str(merchant.id), 'name': merchant.name, 'is_open': merchant.is_open,
-            'menu_items': [{
-                'id': str(item.id), 'name': item.name,
-                'category': item.category.name if item.category else 'ไม่มีหมวดหมู่',
-                'price': item.price, 'is_available': item.is_available,
-            } for item in menu_items],
+            'id': str(merchant.id),
+            'name': merchant.name,
+            'is_open': merchant.is_open,
+            'menu_items': item_serializer.data,
         }})
 
 

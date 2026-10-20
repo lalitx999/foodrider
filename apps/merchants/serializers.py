@@ -14,11 +14,17 @@ class MenuItemSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, default='ไม่มีหมวดหมู่')
 
     def get_image_url(self, obj):
-        request = self.context.get('request')
         url = obj.image.url if obj.image else obj.image_url
         if not url:
             return None
-        return request.build_absolute_uri(url) if request and url.startswith('/') else url
+        if url.startswith('/'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(url)
+            from django.conf import settings
+            backend_base = getattr(settings, 'BACKEND_BASE_URL', 'https://foodrider.tanchonhomserverxxx.online')
+            return f"{backend_base.rstrip('/')}{url}"
+        return url
 
     class Meta:
         model = MenuItem
@@ -28,7 +34,6 @@ class MenuItemSerializer(serializers.ModelSerializer):
 class CategoryWithMenuSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
 
-
     class Meta:
         model = Category
         fields = ['id', 'name', 'sort_order', 'items']
@@ -36,7 +41,7 @@ class CategoryWithMenuSerializer(serializers.ModelSerializer):
     def get_items(self, obj):
         # ดึงเฉพาะรายการอาหารที่เปิดขายอยู่ (is_available = True)
         available_items = obj.items.filter(is_available=True)
-        return MenuItemSerializer(available_items, many=True).data
+        return MenuItemSerializer(available_items, many=True, context=self.context).data
 
 
 class MerchantListSerializer(serializers.ModelSerializer):
@@ -47,8 +52,14 @@ class MerchantListSerializer(serializers.ModelSerializer):
         value = obj.image_url
         if not value:
             return None
-        request = self.context.get('request')
-        return request.build_absolute_uri(value) if request and value.startswith('/') else value
+        if value.startswith('/'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(value)
+            from django.conf import settings
+            backend_base = getattr(settings, 'BACKEND_BASE_URL', 'https://foodrider.tanchonhomserverxxx.online')
+            return f"{backend_base.rstrip('/')}{value}"
+        return value
 
     class Meta:
         model = Merchant
