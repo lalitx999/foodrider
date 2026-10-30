@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 class EmailRegistrationView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'register'
 
     def post(self, request):
         serializer = EmailRegistrationSerializer(data=request.data)
@@ -56,6 +57,7 @@ class EmailRegistrationView(APIView):
 
 class EmailLoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'login'
 
     def post(self, request):
         serializer = EmailLoginSerializer(data=request.data)
@@ -87,6 +89,7 @@ class GoogleVerifyView(APIView):
     รับ id_token จาก Google Auth -> ตรวจสอบ Signature -> คืนค่า JWT Token
     """
     permission_classes = [AllowAny]
+    throttle_scope = 'login'
 
     def post(self, request):
         serializer = GoogleVerifySerializer(data=request.data)

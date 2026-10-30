@@ -2,6 +2,7 @@ from django.urls import path
 from apps.riders.views import (
     RiderStatusToggleView,
     AvailableJobsListView,
+    RiderActiveJobView,
     ClaimJobView,
     CompleteJobView,
     MerchantOrderReadyView,
@@ -14,6 +15,7 @@ urlpatterns = [
     path('rider/status/', RiderStatusToggleView.as_view(), name='rider-status'),
     path('rider/profile/', RiderProfileDetailView.as_view(), name='rider-profile'),
     path('rider/orders/available/', AvailableJobsListView.as_view(), name='rider-jobs-available'),
+    path('rider/orders/active/', RiderActiveJobView.as_view(), name='rider-job-active'),
     path('rider/orders/history/', RiderJobHistoryView.as_view(), name='rider-jobs-history'),
     path('rider/wallet/', RiderWalletView.as_view(), name='rider-wallet'),
     path('rider/orders/<uuid:order_id>/claim/', ClaimJobView.as_view(), name='rider-job-claim'),

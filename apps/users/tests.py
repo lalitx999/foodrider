@@ -1,4 +1,5 @@
 from django.test import TestCase
+from django.core.cache import cache
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -121,3 +122,37 @@ class RoleChangeRequestServiceTests(TestCase):
         self.assertEqual(application.status, ApplicationStatus.REJECTED)
         self.assertEqual(role_request.status, RoleChangeStatus.REJECTED)
         self.assertEqual(role_request.admin_note, 'เอกสารไม่ครบ')
+
+
+class AuthThrottleTests(TestCase):
+    """P0-09: login 10 ครั้ง/นาที, register 5 ครั้ง/นาที (ScopedRateThrottle)"""
+
+    def setUp(self):
+        self.client = APIClient()
+        cache.clear()  # กัน throttle ค้างจาก test อื่น
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_login_throttled_after_ten_attempts(self):
+        url = reverse('email-login')
+        payload = {'email': 'nobody@example.com', 'password': 'wrong-password'}
+
+        for _ in range(10):
+            response = self.client.post(url, payload, format='json')
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        throttled = self.client.post(url, payload, format='json')
+        self.assertEqual(throttled.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_register_throttled_after_five_attempts(self):
+        url = reverse('email-register')
+        payload = {}
+
+        for _ in range(5):
+            response = self.client.post(url, payload, format='json')
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        throttled = self.client.post(url, payload, format='json')
+        self.assertEqual(throttled.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+

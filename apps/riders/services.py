@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.db import transaction
 from apps.orders.models import Order, OrderStatus
+from apps.orders.services import transition_order
 from apps.riders.models import RiderProfile, DeliveryProof
 from apps.users.models import User
 
@@ -31,8 +32,15 @@ def claim_rider_job_atomic(rider_user: User, order_id: str) -> Order:
             raise JobClaimError("งานนี้มีไรเดอร์ท่านอื่นกดรับไปแล้ว (JOB_ALREADY_CLAIMED)")
 
         target_order.rider = rider_user
-        target_order.status = OrderStatus.DELIVERING
-        target_order.save()
+        target_order.save(update_fields=['rider', 'updated_at'])
+        # เปลี่ยนสถานะผ่าน transition_order เท่านั้น (BR-5) + บันทึก log
+        transition_order(
+            target_order,
+            OrderStatus.DELIVERING,
+            actor=rider_user,
+            role='RIDER',
+            note='ไรเดอร์กดรับงาน',
+        )
 
     return target_order
 
@@ -63,8 +71,13 @@ def complete_rider_job_atomic(rider_user: User, order_id: str, *, proof_image, s
             recipient_confirmed=True,
         )
 
-        order.status = OrderStatus.COMPLETED
-        order.save()
+        transition_order(
+            order,
+            OrderStatus.COMPLETED,
+            actor=rider_user,
+            role='RIDER',
+            note='ปิดงานจัดส่งสำเร็จ',
+        )
 
         # คำนวณเพิ่มค่ารอบเข้ากระเป๋าเงินไรเดอร์
         rider_profile.wallet_balance += order.rider_delivery_fee

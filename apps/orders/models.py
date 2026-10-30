@@ -1,8 +1,11 @@
 import uuid
+from decimal import Decimal
+
 from django.db import models
 from django.contrib.gis.db import models as gis_models
 from apps.users.models import User
 from apps.merchants.models import Merchant, MenuItem
+
 
 
 class OrderStatus(models.TextChoices):
@@ -42,7 +45,15 @@ class Order(models.Model):
     note_to_merchant = models.TextField(null=True, blank=True)
     rider_delivery_fee = models.DecimalField(max_digits=10, decimal_places=2)
     platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    platform_delivery_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00')
+    )  # กำไรค่าส่งของแพลตฟอร์ม: 5 + 1*extra_km (BR-7)
     cancelled_reason = models.TextField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cancelled_orders'
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -52,6 +63,37 @@ class Order(models.Model):
 
     def __str__(self):
         return f"{self.order_number} - {self.status} ({self.total_amount} THB)"
+
+    @property
+    def rider_earning(self):
+        return self.rider_delivery_fee
+
+    @property
+    def platform_total_income(self):
+        return self.platform_fee + self.platform_delivery_fee
+
+
+class OrderStatusLog(models.Model):
+    """บันทึกทุกการเปลี่ยนสถานะออเดอร์ เพื่อการตรวจสอบย้อนหลัง (Audit Trail)"""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='status_logs')
+    from_status = models.CharField(max_length=30, choices=OrderStatus.choices, null=True, blank=True)
+    to_status = models.CharField(max_length=30, choices=OrderStatus.choices, db_index=True)
+    actor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='order_status_logs'
+    )
+    role = models.CharField(max_length=20, blank=True, help_text='SYSTEM / CUSTOMER / MERCHANT / RIDER / ADMIN')
+    note = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'order_status_logs'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.order_id}: {self.from_status} -> {self.to_status} ({self.role})'
+
 
 
 class OrderItem(models.Model):

@@ -1,8 +1,12 @@
+import math
+
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.merchants.models import Merchant, MenuItem, Category, MenuOption
+from apps.orders.models import OrderItem
 from apps.merchants.serializers import (
     MerchantListSerializer,
     CategoryWithMenuSerializer,
@@ -11,9 +15,17 @@ from apps.merchants.serializers import (
     CreateMenuItemSerializer,
     MenuItemSerializer
 )
-from apps.merchants.services import get_nearby_open_merchants, get_merchant_full_menu
+from apps.merchants.services import (
+    DEFAULT_RADIUS_KM,
+    get_nearby_open_merchants,
+    get_merchant_full_menu,
+)
 from apps.users.permissions import HasMerchantProfile
 from django.db import transaction
+
+# พิกัดเริ่มต้น (ใจกลางพัทยา) ใช้เมื่อ client ไม่ส่ง lat/lng มา
+DEFAULT_MAP_CENTER_LAT = 12.9276
+DEFAULT_MAP_CENTER_LNG = 100.8771
 
 
 class MerchantListView(APIView):
@@ -22,18 +34,19 @@ class MerchantListView(APIView):
     ดึงรายการร้านค้าที่เปิดอยู่ เรียงลำดับตามระยะทางที่ใกล้ที่สุดผ่าน PostGIS
     """
     permission_classes = [AllowAny]
+    throttle_scope = 'quote'
 
     def get(self, request):
-        lat_str = request.query_params.get('lat', '12.9276')
-        lng_str = request.query_params.get('lng', '100.8771')
-        radius_str = request.query_params.get('radius', '10')
+        lat_str = request.query_params.get('lat')
+        lng_str = request.query_params.get('lng')
+        radius_str = request.query_params.get('radius')
 
         try:
-            lat = float(lat_str) if lat_str else 12.9276
-            lng = float(lng_str) if lng_str else 100.8771
-            radius_km = float(radius_str) if radius_str else 10.0
+            lat = float(lat_str) if lat_str else DEFAULT_MAP_CENTER_LAT
+            lng = float(lng_str) if lng_str else DEFAULT_MAP_CENTER_LNG
             if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
-                raise ValueError("พิกัดละติจูด/ลองจิจูดไม่อยู่ในขอบเขตที่ถูกต้อง")
+                raise ValueError('พิกัดละติจูด/ลองจิจูดไม่อยู่ในขอบเขตที่ถูกต้อง')
+            radius_km = float(radius_str) if radius_str else DEFAULT_RADIUS_KM
         except ValueError as e:
             return Response({
                 'success': False,
@@ -41,6 +54,18 @@ class MerchantListView(APIView):
                 'message': str(e),
                 'details': []
             }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not math.isfinite(radius_km) or radius_km <= 0:
+            return Response({
+                'success': False,
+                'error_code': 'INVALID_RADIUS',
+                'message': 'radius ต้องเป็นตัวเลขมากกว่า 0',
+                'details': [{'field': 'radius'}],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # P0-12: clamp ไม่ให้ยิงทั้งประเทศ
+        max_radius = float(getattr(settings, 'MAX_SEARCH_RADIUS_KM', 15.0))
+        radius_km = min(max(radius_km, 1.0), max_radius)
 
         merchants = get_nearby_open_merchants(lat, lng, radius_km=radius_km)
         serializer = MerchantListSerializer(merchants, many=True, context={'request': request})
@@ -51,6 +76,7 @@ class MerchantListView(APIView):
             'message': f'ดึงรายการร้านค้า {len(merchants)} ร้านสำเร็จ',
             'meta': {
                 'radius_km': radius_km,
+                'max_radius_km': max_radius,
                 'total': len(merchants),
             }
         }, status=status.HTTP_200_OK)
@@ -353,6 +379,16 @@ class MenuItemDetailView(APIView):
         item = MenuItem.objects.filter(id=item_id, merchant=merchant).first()
         if not item:
             return Response({'success': False, 'message': 'ไม่พบเมนูที่ระบุ'}, status=status.HTTP_404_NOT_FOUND)
+
+        # P0-13: เมนูที่มีประวัติการสั่งซื้อห้ามลบ (OrderItem อ้างแบบ RESTRICT) → ซ่อนแทน
+        if OrderItem.objects.filter(menu_item=item).exists():
+            item.is_available = False
+            item.save(update_fields=['is_available'])
+            return Response({
+                'success': True,
+                'data': {'id': str(item.id), 'is_available': False},
+                'message': 'เมนูนี้ถูกซ่อนแทนการลบ เนื่องจากมีประวัติการสั่งซื้อ',
+            }, status=status.HTTP_200_OK)
 
         item.delete()
         return Response({'success': True, 'message': 'ลบเมนูเรียบร้อยแล้ว'}, status=status.HTTP_200_OK)

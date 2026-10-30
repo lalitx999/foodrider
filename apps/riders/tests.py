@@ -144,3 +144,110 @@ class RiderApiTests(TestCase):
         # ตรวจสอบยอดเงินในกระเป๋าไรเดอร์เพิ่มขึ้น 25.50 บาท
         self.rider_profile_1.refresh_from_db()
         self.assertEqual(self.rider_profile_1.wallet_balance, Decimal('25.50'))
+
+
+class RiderActiveJobTests(TestCase):
+    """[P0-16] งานที่กำลังส่ง + ลิงก์นำทางที่พิกัดถูกต้อง"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.customer = User.objects.create(display_name='Customer Active', role=UserRole.CUSTOMER)
+        self.merchant_user = User.objects.create(display_name='Merchant Active', role=UserRole.MERCHANT)
+        self.rider_user = User.objects.create(display_name='Rider Active', role=UserRole.RIDER)
+        self.other_rider = User.objects.create(display_name='Rider Other', role=UserRole.RIDER)
+        RiderProfile.objects.create(user=self.rider_user, vehicle_plate='3กข-7777', is_online=True)
+        RiderProfile.objects.create(user=self.other_rider, vehicle_plate='4กข-6666', is_online=True)
+
+        self.merchant = Merchant.objects.create(
+            user=self.merchant_user,
+            name='ร้านทดสอบไรเดอร์',
+            image_url='',
+            phone_number='0812222222',
+            address='นิมมาน ซอย 9',
+            latitude=Decimal('18.7883'),
+            longitude=Decimal('98.9853'),
+            location=Point(98.9853, 18.7883, srid=4326),
+            is_open=True,
+            bank_account_name='ร้านทดสอบ',
+            bank_account_number='0812222222',
+            bank_name='กรุงไทย',
+        )
+
+        self.order = Order.objects.create(
+            order_number='ORD-RIDER-ACTIVE-1',
+            customer=self.customer,
+            merchant=self.merchant,
+            rider=self.rider_user,
+            status=OrderStatus.DELIVERING,
+            subtotal=Decimal('100.00'),
+            delivery_fee=Decimal('36.00'),
+            total_amount=Decimal('136.00'),
+            delivery_address='บ้านเลขที่ 99',
+            delivery_latitude=Decimal('18.7900'),
+            delivery_longitude=Decimal('98.9860'),
+            delivery_distance_km=Decimal('3.40'),
+            rider_delivery_fee=Decimal('30.00'),
+            platform_fee=Decimal('15.00'),
+            platform_delivery_fee=Decimal('6.00'),
+        )
+
+    def test_active_job_returned(self):
+        self.client.force_authenticate(user=self.rider_user)
+        response = self.client.get(reverse('rider-job-active'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['data']['has_active_job'])
+        order_data = response.data['data']['order']
+        self.assertEqual(order_data['order_number'], 'ORD-RIDER-ACTIVE-1')
+        self.assertEqual(order_data['estimated_time'], '11 นาที')
+        self.assertEqual(order_data['cod_amount'], 136.0)
+        self.assertEqual(order_data['rider_earning'], 30.0)
+        self.assertEqual(order_data['merchant_lat'], 18.7883)
+        self.assertEqual(order_data['navigation']['to_customer']['lat'], 18.79)
+        self.assertIsNotNone(order_data['navigation']['to_customer']['google_maps_url'])
+
+    def test_no_active_job_returns_null(self):
+        self.client.force_authenticate(user=self.other_rider)
+        response = self.client.get(reverse('rider-job-active'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['data']['has_active_job'])
+        self.assertIsNone(response.data['data']['order'])
+
+    def test_navigation_url_includes_origin(self):
+        self.client.force_authenticate(user=self.rider_user)
+        url = reverse('rider-job-active') + '?lat=18.7880&lng=98.9850'
+        response = self.client.get(url)
+
+        navigation_url = response.data['data']['order']['navigation']['to_store']['google_maps_url']
+        self.assertIn('origin=18.788,98.985', navigation_url)
+        self.assertIn('destination=18.7883,98.9853', navigation_url)
+        self.assertIn('travelmode=driving', navigation_url)
+
+    def test_missing_coords_return_null(self):
+        # ข้อมูลพิกัดหายมักถูกบันทึกเป็น 0,0 → ต้องคืน null ไม่ใช่ลิงก์อ่าวกินี
+        self.merchant.latitude = Decimal('0')
+        self.merchant.longitude = Decimal('0')
+        self.merchant.location = None
+        self.merchant.save(update_fields=['latitude', 'longitude', 'location'])
+
+        self.client.force_authenticate(user=self.rider_user)
+        response = self.client.get(reverse('rider-job-active') + '?lat=0&lng=0')
+
+        order_data = response.data['data']['order']
+        self.assertIsNone(order_data['merchant_lat'])
+        self.assertIsNone(order_data['merchant_lng'])
+        to_store = order_data['navigation']['to_store']
+        self.assertIsNone(to_store['lat'])
+        self.assertIsNone(to_store['lng'])
+        self.assertIsNone(to_store['google_maps_url'])
+        # origin 0,0 ต้องไม่ถูกส่งไปใน URL ของจุดส่ง
+        self.assertNotIn('origin=', order_data['navigation']['to_customer']['google_maps_url'])
+
+    def test_google_maps_url_points_to_customer(self):
+        self.client.force_authenticate(user=self.rider_user)
+        response = self.client.get(reverse('rider-job-active'))
+        maps_url = response.data['data']['order']['google_maps_url']
+        self.assertIn('destination=18.79,98.986', maps_url)
+        self.assertNotIn('18.7883', maps_url)
+

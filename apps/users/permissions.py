@@ -4,6 +4,31 @@ from django.contrib.gis.geos import Point
 from apps.users.models import UserRole, ApplicationStatus
 
 
+class IsAdminRole(BasePermission):
+    """อนุญาตเฉพาะผู้ใช้ที่ role = ADMIN (ไม่ใช่แค่ is_staff) — P0-08"""
+
+    message = 'เฉพาะผู้ดูแลระบบ (ADMIN) เท่านั้น'
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_active and user.role == UserRole.ADMIN)
+
+
+class IsStaffOrAdminRole(BasePermission):
+    """ใช้กับ endpoint ที่ให้ Django staff เข้าได้ด้วย (read-only/admin tooling)"""
+
+    message = 'เฉพาะผู้ดูแลระบบเท่านั้น'
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and (user.is_staff or user.role == UserRole.ADMIN)
+        )
+
+
 class HasMerchantProfile(BasePermission):
     """Allow only an authenticated merchant that owns a Merchant profile."""
 

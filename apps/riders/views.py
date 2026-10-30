@@ -4,12 +4,19 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from apps.orders.models import Order, OrderStatus
+from apps.orders.services import InvalidTransition, transition_order
 from apps.merchants.models import Merchant
 from apps.riders.models import RiderProfile
 from apps.riders.serializers import (
     RiderStatusToggleSerializer,
     AvailableJobSerializer,
+    RiderActiveJobSerializer,
     CompleteOrderSerializer
+)
+from apps.riders.navigation import (
+    build_navigation_url,
+    normalize_coordinate_pair,
+    to_coordinate,
 )
 from apps.riders.services import claim_rider_job_atomic, complete_rider_job_atomic, JobClaimError
 from apps.users.permissions import HasMerchantProfile, HasRiderProfile
@@ -80,6 +87,48 @@ class AvailableJobsListView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class RiderActiveJobView(APIView):
+    """
+    GET /api/v1/rider/orders/active/?lat=..&lng=..
+
+    คืนงานที่ไรเดอร์คนนี้กำลังจัดส่งอยู่ (status = DELIVERING) เพื่อให้ frontend
+    restore งานได้หลังรีเฟรช/ปิดแอป (P0-16 / F-52)
+    """
+
+    permission_classes = [HasRiderProfile]
+    throttle_scope = 'quote'
+
+    def get(self, request):
+        # origin = พิกัดไรเดอร์ล่าสุดที่ frontend ส่งมา (ห้าม fallback 0,0)
+        origin = normalize_coordinate_pair(
+            to_coordinate(request.query_params.get('lat')),
+            to_coordinate(request.query_params.get('lng')),
+        )
+
+        order = (
+            Order.objects.filter(rider=request.user, status=OrderStatus.DELIVERING)
+            .select_related('merchant', 'customer')
+            .prefetch_related('items')
+            .order_by('-updated_at')
+            .first()
+        )
+
+        if order is None:
+            return Response({
+                'success': True,
+                'data': {'has_active_job': False, 'order': None},
+                'message': 'ไม่มีงานที่กำลังจัดส่ง',
+            }, status=status.HTTP_200_OK)
+
+        serializer = RiderActiveJobSerializer(order, context={'request': request, 'origin': origin})
+
+        return Response({
+            'success': True,
+            'data': {'has_active_job': True, 'order': serializer.data},
+            'message': 'ดึงงานที่กำลังจัดส่งสำเร็จ',
+        }, status=status.HTTP_200_OK)
+
+
 class RiderJobHistoryView(APIView):
     permission_classes = [HasRiderProfile]
 
@@ -147,9 +196,9 @@ class ClaimJobView(APIView):
             create_and_send_notification(user=order.customer, title='ไรเดอร์รับงานแล้ว', body=f'ไรเดอร์กำลังนำออเดอร์ {order.order_number} ไปส่ง', data={'type': 'RIDER_CLAIMED', 'order_id': str(order.id)})
             create_and_send_notification(user=order.merchant.user, title='ไรเดอร์รับงานแล้ว', body=f'ออเดอร์ {order.order_number} มีไรเดอร์มารับอาหาร', data={'type': 'RIDER_CLAIMED', 'order_id': str(order.id)})
             
-            # Google Maps Navigation Deep Links
-            merchant_nav = f"https://www.google.com/maps/dir/?api=1&destination={order.merchant.latitude},{order.merchant.longitude}"
-            customer_nav = f"https://www.google.com/maps/dir/?api=1&destination={order.delivery_latitude},{order.delivery_longitude}"
+            # Google Maps Navigation Deep Links (คืน None ถ้าพิกัดไม่ครบ — ห้ามสร้าง 0,0/NaN)
+            merchant_nav = build_navigation_url(order.merchant.latitude, order.merchant.longitude)
+            customer_nav = build_navigation_url(order.delivery_latitude, order.delivery_longitude)
 
             return Response({
                 'success': True,
@@ -245,8 +294,22 @@ class MerchantOrderReadyView(APIView):
                 'details': [],
             }, status=status.HTTP_409_CONFLICT)
 
-        order.status = OrderStatus.READY_FOR_PICKUP
-        order.save(update_fields=['status', 'updated_at'])
+        try:
+            transition_order(
+                order,
+                OrderStatus.READY_FOR_PICKUP,
+                actor=request.user,
+                role='MERCHANT',
+                note='ร้านกดอาหารพร้อมส่ง',
+            )
+        except InvalidTransition as error:
+            return Response({
+                'success': False,
+                'error_code': 'INVALID_STATUS_TRANSITION',
+                'message': str(error),
+                'details': [],
+            }, status=status.HTTP_409_CONFLICT)
+
         create_and_send_notification(user=order.customer, title='อาหารพร้อมจัดส่ง', body=f'ร้านเตรียมออเดอร์ {order.order_number} เสร็จแล้ว กำลังหาไรเดอร์', data={'type': 'ORDER_READY', 'order_id': str(order.id)})
         online_riders = RiderProfile.objects.filter(
             is_online=True,
