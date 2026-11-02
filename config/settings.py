@@ -107,6 +107,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 PUBLIC_MEDIA_PREFIXES = (
     'merchant-menus/',
     'merchant-applications/storefronts/',
+    'merchant-storefronts/',
 )
 
 # ไฟล์สลิปเก็บนอก MEDIA_ROOT (P0-05/P0-11) — เข้าถึงได้เฉพาะ signed endpoint

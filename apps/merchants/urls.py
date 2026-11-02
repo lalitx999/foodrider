@@ -8,6 +8,8 @@ from apps.merchants.views import (
     MenuItemCreateView,
     MenuItemDetailView,
     CategoryManageView,
+    MerchantBankChangeView,
+    MerchantProfileView,
 )
 
 urlpatterns = [
@@ -15,6 +17,8 @@ urlpatterns = [
     path('merchants/<uuid:merchant_id>/menu/', MerchantMenuView.as_view(), name='merchant-menu'),
     path('merchant/store-status/', StoreStatusToggleView.as_view(), name='merchant-store-status'),
     path('merchant/dashboard/', MerchantDashboardView.as_view(), name='merchant-dashboard'),
+    path('merchant/profile/', MerchantProfileView.as_view(), name='merchant-profile'),
+    path('merchant/profile/bank-change/', MerchantBankChangeView.as_view(), name='merchant-bank-change'),
     path('merchant/categories/', CategoryManageView.as_view(), name='merchant-categories'),
     path('merchant/menu/', MenuItemCreateView.as_view(), name='merchant-menu-create'),
     path('merchant/menu/<uuid:item_id>/', MenuItemDetailView.as_view(), name='merchant-menu-detail'),

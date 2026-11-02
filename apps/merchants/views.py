@@ -8,6 +8,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.merchants.models import Merchant, MenuItem, Category, MenuOption
 from apps.orders.models import OrderItem
 from apps.merchants.serializers import (
+    BankChangeRequestSerializer,
+    MerchantProfileUpdateSerializer,
     MerchantListSerializer,
     CategoryWithMenuSerializer,
     StoreStatusToggleSerializer,
@@ -16,6 +18,9 @@ from apps.merchants.serializers import (
     MenuItemSerializer
 )
 from apps.merchants.services import (
+    mask_account_number,
+    submit_bank_change,
+    update_merchant_profile,
     DEFAULT_RADIUS_KM,
     get_nearby_open_merchants,
     get_merchant_full_menu,
@@ -392,3 +397,101 @@ class MenuItemDetailView(APIView):
 
         item.delete()
         return Response({'success': True, 'message': 'ลบเมนูเรียบร้อยแล้ว'}, status=status.HTTP_200_OK)
+
+
+# ---------------- ข้อมูลร้าน + คำขอเปลี่ยนบัญชี (module_32 เฟส A) ----------------
+
+def _absolute_media(request, url):
+    if url and url.startswith('/'):
+        return request.build_absolute_uri(url)
+    return url or None
+
+
+def _bank_change_payload(change):
+    if change is None:
+        return None
+    from apps.users.bank_encryption import BankDataEncryptionError, decrypt_bank_value
+
+    try:
+        bank_name = decrypt_bank_value(change.bank_name_encrypted)
+        account_masked = mask_account_number(decrypt_bank_value(change.bank_account_number_encrypted))
+    except BankDataEncryptionError:
+        bank_name, account_masked = '', ''
+    return {
+        'id': str(change.id),
+        'status': change.status,
+        'bank_name': bank_name,
+        'account_number_masked': account_masked,
+        'reject_reason': change.reject_reason,
+        'created_at': change.created_at,
+        'reviewed_at': change.reviewed_at,
+    }
+
+
+def _profile_payload(request, merchant):
+    latest_change = merchant.bank_change_requests.first()
+    return {
+        'id': str(merchant.id),
+        'name': merchant.name,
+        'description': merchant.description or '',
+        'image_url': _absolute_media(request, merchant.image_url),
+        'phone_number': merchant.phone_number,
+        'address': merchant.address,
+        'latitude': float(merchant.latitude) if merchant.latitude is not None else None,
+        'longitude': float(merchant.longitude) if merchant.longitude is not None else None,
+        'is_open': merchant.is_open,
+        # เลขบัญชีแสดงแค่ 4 ตัวท้ายเสมอ
+        'bank': {
+            'bank_name': merchant.bank_name,
+            'bank_account_name': merchant.bank_account_name,
+            'account_number_masked': mask_account_number(merchant.bank_account_number),
+        },
+        'bank_change': _bank_change_payload(latest_change),
+    }
+
+
+def _invalid(serializer):
+    return Response({
+        'success': False,
+        'error_code': 'INVALID_PAYLOAD',
+        'message': 'ข้อมูลไม่ถูกต้อง',
+        'details': serializer.errors,
+    }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MerchantProfileView(APIView):
+    """
+    GET   /api/v1/merchant/profile/  ข้อมูลร้านของฉัน (เลขบัญชีปิดบัง)
+    PATCH /api/v1/merchant/profile/  แก้ข้อมูลหน้าร้าน — มีผลทันที (ไม่รวมบัญชีธนาคาร)
+    """
+    permission_classes = [HasMerchantProfile]
+
+    def get(self, request):
+        return Response({'success': True, 'data': _profile_payload(request, request.user.merchant_profile)})
+
+    def patch(self, request):
+        serializer = MerchantProfileUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _invalid(serializer)
+        data = dict(serializer.validated_data)
+        image = data.pop('image', None)
+        merchant = update_merchant_profile(request.user.merchant_profile, data, image=image)
+        return Response({'success': True, 'data': _profile_payload(request, merchant), 'message': 'บันทึกข้อมูลร้านแล้ว'})
+
+
+class MerchantBankChangeView(APIView):
+    """
+    POST /api/v1/merchant/profile/bank-change/  ยื่นคำขอเปลี่ยนบัญชีรับเงิน (รอแอดมินอนุมัติ)
+    """
+    permission_classes = [HasMerchantProfile]
+
+    def post(self, request):
+        serializer = BankChangeRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _invalid(serializer)
+        change = submit_bank_change(request.user.merchant_profile, **serializer.validated_data)
+        return Response({
+            'success': True,
+            'data': _bank_change_payload(change),
+            'message': 'ส่งคำขอแล้ว ระหว่างรออนุมัติยังใช้บัญชีเดิม',
+        }, status=status.HTTP_201_CREATED)

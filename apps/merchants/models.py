@@ -97,3 +97,42 @@ class MenuOption(models.Model):
 
     def __str__(self):
         return f"{self.name} (+{self.extra_price} THB)"
+
+
+class BankChangeStatus(models.TextChoices):
+    PENDING = 'PENDING', 'Pending'
+    APPROVED = 'APPROVED', 'Approved'
+    REJECTED = 'REJECTED', 'Rejected'
+    CANCELLED = 'CANCELLED', 'Cancelled'
+
+
+class MerchantBankChangeRequest(models.Model):
+    """
+    คำขอเปลี่ยนบัญชีรับเงินของร้าน — ต้องให้แอดมินอนุมัติก่อนมีผล (module_32)
+    เลขบัญชีในคำขอเก็บแบบเข้ารหัส (Fernet) เหมือนใบสมัครไรเดอร์
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE, related_name='bank_change_requests')
+    bank_name_encrypted = models.TextField()
+    bank_account_name_encrypted = models.TextField()
+    bank_account_number_encrypted = models.TextField()
+    status = models.CharField(max_length=20, choices=BankChangeStatus.choices, default=BankChangeStatus.PENDING, db_index=True)
+    reviewer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_bank_changes')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'merchant_bank_change_requests'
+        ordering = ['-created_at']
+        constraints = [
+            # มีคำขอรออนุมัติได้ทีละ 1 ใบต่อร้าน
+            models.UniqueConstraint(
+                fields=['merchant'],
+                condition=models.Q(status='PENDING'),
+                name='one_pending_bank_change_per_merchant',
+            ),
+        ]
+
+    def __str__(self):
+        return f"Bank change {self.merchant.name} ({self.status})"
