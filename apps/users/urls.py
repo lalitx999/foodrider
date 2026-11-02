@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.users.views import (
     EmailRegistrationView,
     EmailLoginView,
+    LogoutView,
     SelectOnboardingRoleView,
     GoogleVerifyView,
     SetRoleView,
@@ -16,6 +17,7 @@ from apps.users.views import (
 urlpatterns = [
     path('auth/register/', EmailRegistrationView.as_view(), name='email-register'),
     path('auth/login/', EmailLoginView.as_view(), name='email-login'),
+    path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('onboarding/select-role/', SelectOnboardingRoleView.as_view(), name='select-onboarding-role'),
     path('auth/google-verify/', GoogleVerifyView.as_view(), name='google-verify'),
     path('auth/set-role/', SetRoleView.as_view(), name='set-role'),

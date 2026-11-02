@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 from django.contrib.auth import authenticate
 from django.contrib.gis.geos import Point
 from django.db import transaction
@@ -44,6 +45,59 @@ class RoleChangeApprovalError(Exception):
     pass
 
 
+DEFAULT_STOREFRONT_IMAGE = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
+DEFAULT_LATITUDE = Decimal('12.9276')
+DEFAULT_LONGITUDE = Decimal('100.8771')
+
+
+def ensure_merchant_profile(user: User, application):
+    """สร้างร้านค้าจากใบสมัครที่อนุมัติแล้ว (ถ้ามีอยู่แล้วจะไม่สร้างซ้ำ) — ใช้ตอนอนุมัติ และใน sync_user_roles"""
+    from apps.merchants.models import Merchant
+
+    lat = application.latitude if application.latitude is not None else DEFAULT_LATITUDE
+    lng = application.longitude if application.longitude is not None else DEFAULT_LONGITUDE
+    img_url = ''
+    if application.storefront_image:
+        try:
+            img_url = application.storefront_image.url
+        except Exception:
+            img_url = ''
+
+    merchant, _ = Merchant.objects.get_or_create(
+        user=user,
+        defaults={
+            'name': application.store_name or 'ร้านค้าของฉัน',
+            'image_url': img_url or DEFAULT_STOREFRONT_IMAGE,
+            'phone_number': application.phone_number or '',
+            'address': application.address or '',
+            'latitude': lat,
+            'longitude': lng,
+            'location': Point(float(lng), float(lat), srid=4326),
+            'is_open': True,
+            'bank_account_name': application.bank_account_name or 'บัญชีร้านค้า',
+            'bank_account_number': application.bank_account_number or '0000000000',
+            'bank_name': application.bank_name or 'พร้อมเพย์',
+        },
+    )
+    return merchant
+
+
+def ensure_rider_profile(user: User, application):
+    """สร้าง RiderProfile จากใบสมัครที่อนุมัติแล้ว (ถ้ามีอยู่แล้วจะไม่สร้างซ้ำ)"""
+    from apps.riders.models import RiderProfile
+
+    rider_profile, _ = RiderProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            'vehicle_plate': application.vehicle_plate or 'ไม่ระบุ',
+            'bank_account_name_encrypted': application.bank_account_name_encrypted,
+            'bank_account_number_encrypted': application.bank_account_number_encrypted,
+            'bank_name_encrypted': application.bank_name_encrypted,
+        },
+    )
+    return rider_profile
+
+
 @transaction.atomic
 def approve_role_change_request(request_id, reviewer: User, admin_note: str = '') -> RoleChangeRequest:
     """Create the required role profile and switch the user's sole active role atomically."""
@@ -61,37 +115,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
         application = request.merchant_application
         if not application:
             raise RoleChangeApprovalError('ไม่พบใบสมัครร้านค้าที่พร้อมอนุมัติ')
-        from decimal import Decimal
-        from django.contrib.gis.geos import Point
-        from apps.merchants.models import Merchant
-
-        lat = application.latitude if application.latitude is not None else Decimal('12.9276')
-        lng = application.longitude if application.longitude is not None else Decimal('100.8771')
-        img_url = ''
-        if application.storefront_image:
-            try:
-                img_url = application.storefront_image.url
-            except Exception:
-                img_url = ''
-        if not img_url:
-            img_url = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
-
-        Merchant.objects.get_or_create(
-            user=user,
-            defaults={
-                'name': application.store_name or 'ร้านค้าของฉัน',
-                'image_url': img_url,
-                'phone_number': application.phone_number or '',
-                'address': application.address or '',
-                'latitude': lat,
-                'longitude': lng,
-                'location': Point(float(lng), float(lat), srid=4326),
-                'is_open': True,
-                'bank_account_name': application.bank_account_name or 'บัญชีร้านค้า',
-                'bank_account_number': application.bank_account_number or '0000000000',
-                'bank_name': application.bank_name or 'พร้อมเพย์',
-            },
-        )
+        ensure_merchant_profile(user, application)
         application.status = ApplicationStatus.APPROVED
         application.admin_note = admin_note or None
         application.reviewed_at = timezone.now()
@@ -100,16 +124,7 @@ def approve_role_change_request(request_id, reviewer: User, admin_note: str = ''
         application = request.rider_application
         if not application:
             raise RoleChangeApprovalError('ไม่พบใบสมัครไรเดอร์ที่พร้อมอนุมัติ')
-        from apps.riders.models import RiderProfile
-        RiderProfile.objects.get_or_create(
-            user=user,
-            defaults={
-                'vehicle_plate': application.vehicle_plate or 'ไม่ระบุ',
-                'bank_account_name_encrypted': application.bank_account_name_encrypted,
-                'bank_account_number_encrypted': application.bank_account_number_encrypted,
-                'bank_name_encrypted': application.bank_name_encrypted,
-            },
-        )
+        ensure_rider_profile(user, application)
         application.status = ApplicationStatus.APPROVED
         application.admin_note = admin_note or None
         application.reviewed_at = timezone.now()

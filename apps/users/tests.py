@@ -156,3 +156,140 @@ class AuthThrottleTests(TestCase):
         throttled = self.client.post(url, payload, format='json')
         self.assertEqual(throttled.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
+
+
+class PermissionSideEffectTests(TestCase):
+    """P0-08: permission และ GET ต้องตรวจอย่างเดียว ห้ามสร้าง/แก้ข้อมูล"""
+
+    def setUp(self):
+        from apps.merchants.models import Merchant
+        from apps.riders.models import RiderProfile
+        from apps.users.models import CustomerProfile
+        self.Merchant, self.RiderProfile, self.CustomerProfile = Merchant, RiderProfile, CustomerProfile
+        self.client = APIClient()
+
+    def _row_counts(self):
+        return (self.Merchant.objects.count(), self.RiderProfile.objects.count(),
+                self.CustomerProfile.objects.count())
+
+    def test_admin_without_profiles_gets_403_and_nothing_created(self):
+        admin = User.objects.create(display_name='Admin', email='a@example.com', role=UserRole.ADMIN, is_staff=True)
+        self.client.force_authenticate(admin)
+        before = self._row_counts()
+
+        self.assertEqual(self.client.get(reverse('merchant-dashboard')).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get(reverse('rider-profile')).status_code, status.HTTP_403_FORBIDDEN)
+
+        self.assertEqual(self._row_counts(), before)
+
+    def test_approved_application_without_profile_is_not_auto_fixed(self):
+        user = User.objects.create(display_name='Shop', email='shop@example.com', role=UserRole.CUSTOMER)
+        MerchantApplication.objects.create(
+            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='พัทยา',
+            storefront_image='merchant-applications/storefronts/s.jpg', status=ApplicationStatus.APPROVED,
+        )
+        self.client.force_authenticate(user)
+        before = self._row_counts()
+
+        self.assertEqual(self.client.get(reverse('merchant-dashboard')).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get(reverse('user-profile')).status_code, status.HTTP_200_OK)
+
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.CUSTOMER)
+        self.assertEqual(self._row_counts(), before)
+
+    def test_admin_role_can_access_backoffice_without_is_staff(self):
+        admin = User.objects.create(display_name='Admin2', email='a2@example.com', role=UserRole.ADMIN, is_staff=False)
+        self.client.force_authenticate(admin)
+        self.assertEqual(self.client.get(reverse('admin-slip-list')).status_code, status.HTTP_200_OK)
+
+    def test_staff_without_admin_role_cannot_access_backoffice(self):
+        staff = User.objects.create(display_name='Staff', email='s@example.com', role=UserRole.CUSTOMER, is_staff=True)
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(reverse('admin-slip-list')).status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SyncUserRolesCommandTests(TestCase):
+    """P0-08: คำสั่ง sync_user_roles เติมข้อมูลที่ขาด และรันซ้ำได้"""
+
+    def _call(self, *args):
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        call_command('sync_user_roles', *args, stdout=out)
+        return out.getvalue()
+
+    def _approved_shop(self, email, role):
+        user = User.objects.create(display_name='Shop', email=email, role=role)
+        MerchantApplication.objects.create(
+            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='พัทยา',
+            storefront_image='merchant-applications/storefronts/s.jpg', status=ApplicationStatus.APPROVED,
+        )
+        return user
+
+    def test_creates_missing_profile_and_upgrades_customer(self):
+        user = self._approved_shop('shop1@example.com', UserRole.CUSTOMER)
+        self._call()
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.MERCHANT)
+        self.assertTrue(hasattr(user, 'merchant_profile'))
+
+    def test_idempotent(self):
+        from apps.merchants.models import Merchant
+        self._approved_shop('shop2@example.com', UserRole.CUSTOMER)
+        self._call()
+        self._call()
+        self.assertEqual(Merchant.objects.count(), 1)
+
+    def test_dry_run_changes_nothing(self):
+        from apps.merchants.models import Merchant
+        user = self._approved_shop('shop3@example.com', UserRole.CUSTOMER)
+        self._call('--dry-run')
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.CUSTOMER)
+        self.assertEqual(Merchant.objects.count(), 0)
+
+    def test_does_not_switch_rider_to_merchant(self):
+        user = self._approved_shop('shop4@example.com', UserRole.RIDER)
+        output = self._call()
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.RIDER)
+        self.assertIn('ตรวจเอง', output)
+
+    def test_never_touches_admin(self):
+        user = self._approved_shop('shop5@example.com', UserRole.ADMIN)
+        self._call()
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.ADMIN)
+        self.assertFalse(hasattr(user, 'merchant_profile'))
+
+
+class LogoutTests(TestCase):
+    """P0-07: logout ต้อง blacklist refresh token"""
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = User.objects.create(display_name='Logout User', email='logout@example.com', role=UserRole.CUSTOMER)
+
+    def test_logout_blacklists_refresh(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        refresh = str(RefreshToken.for_user(self.user))
+
+        response = self.client.post(reverse('logout'), {'refresh': refresh}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        response = self.client.post(reverse('token-refresh'), {'refresh': refresh}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_twice_is_ok(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        refresh = str(RefreshToken.for_user(self.user))
+        self.client.post(reverse('logout'), {'refresh': refresh}, format='json')
+        response = self.client.post(reverse('logout'), {'refresh': refresh}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_logout_requires_refresh(self):
+        response = self.client.post(reverse('logout'), {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['error_code'], 'REFRESH_TOKEN_REQUIRED')

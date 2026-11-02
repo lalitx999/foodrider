@@ -102,6 +102,13 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# โฟลเดอร์ใต้ MEDIA_ROOT ที่เปิดให้ทุกคนเห็นได้ (P0-11 ทาง A) — ต้องตรงกับ location ใน nginx.conf
+# อย่าเพิ่มโฟลเดอร์ที่มีข้อมูลส่วนบุคคล (เอกสารผู้สมัคร, ใบขับขี่, รูปส่งของ, สลิป)
+PUBLIC_MEDIA_PREFIXES = (
+    'merchant-menus/',
+    'merchant-applications/storefronts/',
+)
+
 # ไฟล์สลิปเก็บนอก MEDIA_ROOT (P0-05/P0-11) — เข้าถึงได้เฉพาะ signed endpoint
 SLIP_STORAGE_LOCATION = env('SLIP_STORAGE_LOCATION', default=os.path.join(BASE_DIR, 'private_media'))
 # production: ให้ nginx เสิร์ฟไฟล์เองผ่าน internal location (X-Accel-Redirect)

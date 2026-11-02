@@ -17,6 +17,13 @@ urlpatterns = [
 # P0-11: ห้ามเสิร์ฟ /media/ แบบ public จาก Django อีก
 # - ไฟล์สลิปอยู่ใน PRIVATE storage (SLIP_STORAGE_LOCATION) และเข้าถึงผ่าน signed endpoint เท่านั้น
 # - production ให้ nginx เป็นผู้เสิร์ฟไฟล์ private ผ่าน X-Accel-Redirect
+# - ตอน DEBUG ให้ Django เสิร์ฟเฉพาะโฟลเดอร์ public (รูปเมนู/รูปหน้าร้าน) — ดู config/media_urls.py
+from django.conf import settings
+
+from config.media_urls import public_media_urlpatterns
+
+if settings.DEBUG:
+    urlpatterns += public_media_urlpatterns()
 
 
 

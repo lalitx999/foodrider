@@ -291,3 +291,31 @@ class MenuItemDeleteTests(TestCase):
         response = self.client.delete(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+
+
+class PublicMediaRegexTests(TestCase):
+    """P0-11 ทาง A: เปิดเฉพาะรูปเมนู/รูปหน้าร้าน ส่วนไฟล์ส่วนตัวต้องไม่ match"""
+
+    def setUp(self):
+        import re
+        from django.conf import settings
+        from config.media_urls import build_public_media_regex
+        self.pattern = re.compile(build_public_media_regex(settings.PUBLIC_MEDIA_PREFIXES))
+
+    def test_public_folders_are_served(self):
+        self.assertTrue(self.pattern.match('media/merchant-menus/pad-thai.jpg'))
+        self.assertTrue(self.pattern.match('media/merchant-applications/storefronts/shop.png'))
+
+    def test_private_folders_are_not_served(self):
+        for path in [
+            'media/delivery-proofs/images/a.jpg',
+            'media/delivery-proofs/signatures/a.png',
+            'media/payment-slips/x/slip.jpg',
+            'media/merchant-applications/identity/id.jpg',
+            'media/merchant-applications/documents/doc.pdf',
+            'media/rider-applications/licenses/l.jpg',
+        ]:
+            self.assertIsNone(self.pattern.match(path), path)
+
+    def test_path_traversal_blocked(self):
+        self.assertIsNone(self.pattern.match('media/merchant-menus/../delivery-proofs/images/a.jpg'))

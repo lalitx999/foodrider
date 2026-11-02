@@ -68,6 +68,40 @@ class EmailLoginView(APIView):
         return Response({'success': True, 'data': generate_jwt_tokens(user), 'message': 'เข้าสู่ระบบสำเร็จ'})
 
 
+class LogoutView(APIView):
+    """
+    POST /api/v1/auth/logout/  body: {"refresh": "<refresh token>"}
+    ใส่ refresh token ลง blacklist เพื่อให้ใช้ขอ access ใหม่ไม่ได้อีก (P0-07)
+
+    AllowAny เพราะตอนกด logout access token อาจหมดอายุไปแล้ว
+    ปลอดภัย: ผู้เรียกทำได้แค่ "ยกเลิก" token ที่ตัวเองถืออยู่เท่านั้น
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'login'
+
+    def post(self, request):
+        from rest_framework_simplejwt.exceptions import TokenError
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        raw_refresh = request.data.get('refresh')
+        if not raw_refresh or not isinstance(raw_refresh, str):
+            return Response({
+                'success': False,
+                'error_code': 'REFRESH_TOKEN_REQUIRED',
+                'message': 'กรุณาส่ง refresh token',
+                'details': [],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            RefreshToken(raw_refresh).blacklist()
+        except TokenError:
+            # token หมดอายุ/ถูก blacklist ไปแล้ว → ถือว่าออกจากระบบแล้ว ไม่ต้องแจ้ง error
+            pass
+
+        return Response({'success': True, 'message': 'ออกจากระบบเรียบร้อย'})
+
+
 class SelectOnboardingRoleView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -196,16 +230,8 @@ class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        # Auto-sync role if application was approved but user.role wasn't updated
-        if hasattr(user, 'merchant_application') and user.merchant_application.status == ApplicationStatus.APPROVED and user.role != UserRole.MERCHANT:
-            user.role = UserRole.MERCHANT
-            user.save(update_fields=['role', 'updated_at'])
-        elif hasattr(user, 'rider_application') and user.rider_application.status == ApplicationStatus.APPROVED and user.role != UserRole.RIDER:
-            user.role = UserRole.RIDER
-            user.save(update_fields=['role', 'updated_at'])
-
-        serializer = UserProfileSerializer(user)
+        # GET ต้องไม่เขียน DB (P0-08) — role ถูกตั้งตอนแอดมินอนุมัติ, ข้อมูลเก่าใช้ `manage.py sync_user_roles`
+        serializer = UserProfileSerializer(request.user)
         return Response({
             'success': True,
             'data': serializer.data,
