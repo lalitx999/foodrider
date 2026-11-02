@@ -185,7 +185,7 @@ class PermissionSideEffectTests(TestCase):
     def test_approved_application_without_profile_is_not_auto_fixed(self):
         user = User.objects.create(display_name='Shop', email='shop@example.com', role=UserRole.CUSTOMER)
         MerchantApplication.objects.create(
-            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='พัทยา',
+            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='ที่อยู่ทดสอบ',
             storefront_image='merchant-applications/storefronts/s.jpg', status=ApplicationStatus.APPROVED,
         )
         self.client.force_authenticate(user)
@@ -219,13 +219,23 @@ class SyncUserRolesCommandTests(TestCase):
         call_command('sync_user_roles', *args, stdout=out)
         return out.getvalue()
 
-    def _approved_shop(self, email, role):
+    def _approved_shop(self, email, role, with_location=True):
         user = User.objects.create(display_name='Shop', email=email, role=role)
         MerchantApplication.objects.create(
-            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='พัทยา',
+            user=user, store_name='ร้านทดสอบ', phone_number='0800000000', address='ที่อยู่ทดสอบ',
+            latitude=13.7563 if with_location else None, longitude=100.5018 if with_location else None,
             storefront_image='merchant-applications/storefronts/s.jpg', status=ApplicationStatus.APPROVED,
         )
         return user
+
+    def test_skips_shop_without_location(self):
+        from apps.merchants.models import Merchant
+        user = self._approved_shop('nolocation@example.com', UserRole.CUSTOMER, with_location=False)
+        output = self._call()
+        user.refresh_from_db()
+        self.assertEqual(user.role, UserRole.CUSTOMER)  # ไม่เปลี่ยน role ถ้าสร้างร้านไม่ได้
+        self.assertEqual(Merchant.objects.count(), 0)
+        self.assertIn('ยังไม่มีพิกัดร้าน', output)
 
     def test_creates_missing_profile_and_upgrades_customer(self):
         user = self._approved_shop('shop1@example.com', UserRole.CUSTOMER)
@@ -293,3 +303,42 @@ class LogoutTests(TestCase):
         response = self.client.post(reverse('logout'), {}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data['error_code'], 'REFRESH_TOKEN_REQUIRED')
+
+
+class MerchantApprovalLocationTests(TestCase):
+    """อนุมัติร้านต้องมีพิกัดจริง — ไม่ใช้พิกัดกลางเมืองแทน (ระบบใช้ได้หลายพื้นที่)"""
+
+    def setUp(self):
+        self.reviewer = User.objects.create(display_name='Admin', email='rev@example.com', role=UserRole.ADMIN, is_staff=True)
+        self.customer = User.objects.create(display_name='Shop Owner', email='shopowner@example.com', role=UserRole.CUSTOMER)
+
+    def _request(self, latitude, longitude):
+        application = MerchantApplication.objects.create(
+            user=self.customer, store_name='ร้านใหม่', phone_number='0800000000', address='ที่อยู่',
+            latitude=latitude, longitude=longitude,
+            storefront_image='merchant-applications/storefronts/s.jpg', status=ApplicationStatus.PENDING_REVIEW,
+            bank_account_name='เจ้าของ', bank_account_number='1234567890', bank_name='กสิกรไทย',
+        )
+        return RoleChangeRequest.objects.create(
+            user=self.customer, current_role=UserRole.CUSTOMER, requested_role=UserRole.MERCHANT, merchant_application=application,
+        )
+
+    def test_approve_without_location_is_refused(self):
+        from apps.merchants.models import Merchant
+        from apps.users.services import RoleChangeApprovalError
+        role_request = self._request(None, None)
+        with self.assertRaises(RoleChangeApprovalError):
+            approve_role_change_request(role_request.id, self.reviewer)
+        self.customer.refresh_from_db()
+        role_request.refresh_from_db()
+        self.assertEqual(self.customer.role, UserRole.CUSTOMER)
+        self.assertEqual(role_request.status, RoleChangeStatus.PENDING)
+        self.assertFalse(Merchant.objects.filter(user=self.customer).exists())
+
+    def test_approve_with_location_pins_real_point(self):
+        role_request = self._request(13.7563, 100.5018)
+        approve_role_change_request(role_request.id, self.reviewer)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.role, UserRole.MERCHANT)
+        self.assertAlmostEqual(self.customer.merchant_profile.location.y, 13.7563, places=4)
+        self.assertAlmostEqual(self.customer.merchant_profile.location.x, 100.5018, places=4)

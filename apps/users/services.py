@@ -46,16 +46,31 @@ class RoleChangeApprovalError(Exception):
 
 
 DEFAULT_STOREFRONT_IMAGE = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80'
-DEFAULT_LATITUDE = Decimal('12.9276')
-DEFAULT_LONGITUDE = Decimal('100.8771')
+
+
+def application_has_location(application) -> bool:
+    """ใบสมัครร้านมีพิกัดจริงไหม (ไม่ว่าง ไม่ใช่ 0,0) — ไม่มีพิกัดกลางเมืองให้เดาแทน"""
+    lat, lng = application.latitude, application.longitude
+    if lat is None or lng is None:
+        return False
+    return not (Decimal(lat) == 0 and Decimal(lng) == 0)
 
 
 def ensure_merchant_profile(user: User, application):
-    """สร้างร้านค้าจากใบสมัครที่อนุมัติแล้ว (ถ้ามีอยู่แล้วจะไม่สร้างซ้ำ) — ใช้ตอนอนุมัติ และใน sync_user_roles"""
+    """
+    สร้างร้านค้าจากใบสมัครที่อนุมัติแล้ว (ถ้ามีอยู่แล้วจะไม่สร้างซ้ำ) — ใช้ตอนอนุมัติ และใน sync_user_roles
+    ใบสมัครต้องมีพิกัดจริง ไม่งั้น raise RoleChangeApprovalError (ร้านจะไม่ถูกปักหมุดผิดพื้นที่)
+    """
     from apps.merchants.models import Merchant
 
-    lat = application.latitude if application.latitude is not None else DEFAULT_LATITUDE
-    lng = application.longitude if application.longitude is not None else DEFAULT_LONGITUDE
+    existing = Merchant.objects.filter(user=user).first()
+    if existing:
+        return existing
+    if not application_has_location(application):
+        raise RoleChangeApprovalError(
+            f'ใบสมัคร "{application.store_name}" ยังไม่มีพิกัดร้าน — ให้ร้านส่งพิกัดใหม่ หรือแอดมินกรอก latitude/longitude ก่อนอนุมัติ'
+        )
+    lat, lng = application.latitude, application.longitude
     img_url = ''
     if application.storefront_image:
         try:

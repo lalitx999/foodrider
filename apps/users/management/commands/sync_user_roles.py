@@ -4,7 +4,7 @@ from django.db import transaction
 from apps.users.models import (
     ApplicationStatus, CustomerProfile, MerchantApplication, RiderApplication, User, UserRole,
 )
-from apps.users.services import ensure_merchant_profile, ensure_rider_profile
+from apps.users.services import RoleChangeApprovalError, ensure_merchant_profile, ensure_rider_profile
 
 # เปลี่ยน role ให้อัตโนมัติเฉพาะคนที่ยังไม่มีบทบาทงาน (อัปเกรดจากลูกค้า/ยังไม่เลือก)
 ROLES_SAFE_TO_UPGRADE = {UserRole.UNASSIGNED, UserRole.CUSTOMER}
@@ -65,7 +65,12 @@ class Command(BaseCommand):
 
         changes = []
         if needs_profile:
-            create_profile(user)
+            try:
+                create_profile(user)
+            except RoleChangeApprovalError as error:
+                # เช่น ใบสมัครร้านไม่มีพิกัด — ข้ามคนนี้ ไม่เปลี่ยน role ให้ ตรวจเอง
+                self.stdout.write(self.style.WARNING(f'! {user.email or user.id}: {error}'))
+                return 0
             changes.append(f'สร้าง {profile_attr}')
         if needs_role and user.role not in ROLES_SAFE_TO_UPGRADE:
             # เช่น เคยเป็นไรเดอร์แล้วย้ายมาเป็นร้าน → ใบสมัครอนุมัติทั้งคู่ ห้ามเดาว่าควรเป็นอะไร

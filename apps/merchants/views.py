@@ -28,15 +28,11 @@ from apps.merchants.services import (
 from apps.users.permissions import HasMerchantProfile
 from django.db import transaction
 
-# พิกัดเริ่มต้น (ใจกลางพัทยา) ใช้เมื่อ client ไม่ส่ง lat/lng มา
-DEFAULT_MAP_CENTER_LAT = 12.9276
-DEFAULT_MAP_CENTER_LNG = 100.8771
-
-
 class MerchantListView(APIView):
     """
     GET /api/v1/merchants/?lat=xxx&lng=xxx&radius=10
     ดึงรายการร้านค้าที่เปิดอยู่ เรียงลำดับตามระยะทางที่ใกล้ที่สุดผ่าน PostGIS
+    lat/lng บังคับ — ไม่มีพิกัดกลางเมืองให้เดา (ระบบใช้ได้หลายพื้นที่)
     """
     permission_classes = [AllowAny]
     throttle_scope = 'quote'
@@ -46,9 +42,19 @@ class MerchantListView(APIView):
         lng_str = request.query_params.get('lng')
         radius_str = request.query_params.get('radius')
 
+        if not lat_str or not lng_str:
+            return Response({
+                'success': False,
+                'error_code': 'LOCATION_REQUIRED',
+                'message': 'ต้องส่งพิกัด lat และ lng ของผู้ใช้เพื่อค้นหาร้านใกล้เคียง',
+                'details': [{'field': 'lat'}, {'field': 'lng'}],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            lat = float(lat_str) if lat_str else DEFAULT_MAP_CENTER_LAT
-            lng = float(lng_str) if lng_str else DEFAULT_MAP_CENTER_LNG
+            lat = float(lat_str)
+            lng = float(lng_str)
+            if not (math.isfinite(lat) and math.isfinite(lng)) or (lat == 0 and lng == 0):
+                raise ValueError('พิกัดไม่ใช่ตำแหน่งจริง')
             if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
                 raise ValueError('พิกัดละติจูด/ลองจิจูดไม่อยู่ในขอบเขตที่ถูกต้อง')
             radius_km = float(radius_str) if radius_str else DEFAULT_RADIUS_KM
