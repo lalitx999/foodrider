@@ -211,6 +211,10 @@ RIDER_BASE_EARNING = Decimal(env('RIDER_BASE_EARNING', default='25.00'))
 RIDER_PER_KM_EARNING = Decimal(env('RIDER_PER_KM_EARNING', default='5.00'))
 MAX_DELIVERY_DISTANCE_KM = Decimal(env('MAX_DELIVERY_DISTANCE_KM', default='15'))
 
+# Module 33: ร้านเดียว (หลายสาขา) — ปิดการสมัครร้าน/ไรเดอร์แบบ marketplace เป็นค่าเริ่มต้น
+# แอดมินสร้างสาขา/ไรเดอร์เองด้วย `create_branch` / `create_rider` · เปิดกลับได้ด้วย env (ไม่ต้องแก้โค้ด)
+MARKETPLACE_SIGNUP_ENABLED = env.bool('MARKETPLACE_SIGNUP_ENABLED', default=False)
+
 MAX_SEARCH_RADIUS_KM = env.float('MAX_SEARCH_RADIUS_KM', default=15.0)
 DEFAULT_SEARCH_RADIUS_KM = env.float('DEFAULT_SEARCH_RADIUS_KM', default=10.0)
 

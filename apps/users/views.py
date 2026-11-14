@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
+from django.conf import settings
 from django.utils import timezone
 from apps.users.models import User
 from apps.users.models import UserRole
@@ -32,6 +33,19 @@ from apps.users.services import (
 
 
 logger = logging.getLogger(__name__)
+
+# บทบาทที่สมัครเองได้เฉพาะตอนเปิดโหมด marketplace (Module 33)
+MARKETPLACE_ONLY_ROLES = {UserRole.MERCHANT, UserRole.RIDER}
+
+
+def marketplace_signup_closed_response():
+    """ตอบเมื่อปิดรับสมัครร้าน/ไรเดอร์ — แอดมินเป็นคนสร้างบัญชีให้แทน"""
+    return Response({
+        'success': False,
+        'error_code': 'SIGNUP_CLOSED',
+        'message': 'ระบบไม่เปิดรับสมัครร้านค้าหรือไรเดอร์ด้วยตนเอง กรุณาติดต่อเจ้าของร้าน',
+        'details': [],
+    }, status=status.HTTP_403_FORBIDDEN)
 
 
 class EmailRegistrationView(APIView):
@@ -110,6 +124,8 @@ class SelectOnboardingRoleView(APIView):
             return Response({'success': False, 'error_code': 'ROLE_ALREADY_ASSIGNED', 'message': 'บัญชีนี้มีบทบาทแล้ว', 'details': []}, status=status.HTTP_409_CONFLICT)
         serializer = SelectOnboardingRoleSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if serializer.validated_data['role'] in MARKETPLACE_ONLY_ROLES and not settings.MARKETPLACE_SIGNUP_ENABLED:
+            return marketplace_signup_closed_response()
         intent, _ = OnboardingIntent.objects.update_or_create(
             user=request.user,
             defaults={'selected_role': serializer.validated_data['role'], 'status': OnboardingIntentStatus.PENDING, 'completed_at': None},
@@ -279,6 +295,8 @@ class MerchantApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not settings.MARKETPLACE_SIGNUP_ENABLED:
+            return marketplace_signup_closed_response()
         intent = getattr(request.user, 'onboarding_intent', None)
         if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.MERCHANT:
             return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเลือกบทบาทก่อนเริ่มลงทะเบียน', 'details': []}, status=status.HTTP_409_CONFLICT)
@@ -331,6 +349,8 @@ class RiderApplicationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not settings.MARKETPLACE_SIGNUP_ENABLED:
+            return marketplace_signup_closed_response()
         intent = getattr(request.user, 'onboarding_intent', None)
         if not intent or intent.status != OnboardingIntentStatus.PENDING or intent.selected_role != UserRole.RIDER:
             return Response({'success': False, 'error_code': 'ONBOARDING_INTENT_REQUIRED', 'message': 'กรุณาเลือกบทบาทก่อนเริ่มลงทะเบียน', 'details': []}, status=status.HTTP_409_CONFLICT)

@@ -342,3 +342,155 @@ class MerchantApprovalLocationTests(TestCase):
         self.assertEqual(self.customer.role, UserRole.MERCHANT)
         self.assertAlmostEqual(self.customer.merchant_profile.location.y, 13.7563, places=4)
         self.assertAlmostEqual(self.customer.merchant_profile.location.x, 100.5018, places=4)
+
+
+# ---------------------------------------------------------------------------
+# Module 33 — ร้านเดียว: ปิดสมัครร้าน/ไรเดอร์ + แอดมินสร้างสาขา/ไรเดอร์เอง
+# ---------------------------------------------------------------------------
+from io import StringIO
+from unittest import mock
+
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.test import override_settings
+
+from apps.users.staff_accounts import AccountInput, StaffAccountError, create_branch, create_rider
+
+STAFF_PASSWORD = 'staff-password-2569'
+
+
+def make_user(*, email, password, display_name, role=UserRole.UNASSIGNED):
+    user = User(email=email, display_name=display_name, role=role)
+    user.set_password(password)
+    user.save()
+    return user
+
+
+@override_settings(MARKETPLACE_SIGNUP_ENABLED=False)
+class MarketplaceSignupClosedTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user(email='walkin@example.com', password=STAFF_PASSWORD, display_name='Walk In')
+        self.client.force_authenticate(self.user)
+
+    def test_select_merchant_or_rider_role_is_closed(self):
+        for role in (UserRole.MERCHANT, UserRole.RIDER):
+            response = self.client.post(reverse('select-onboarding-role'), {'role': role}, format='json')
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+            self.assertEqual(response.data['error_code'], 'SIGNUP_CLOSED')
+        self.assertFalse(hasattr(User.objects.get(pk=self.user.pk), 'onboarding_intent'))
+
+    def test_customer_role_still_open(self):
+        response = self.client.post(reverse('select-onboarding-role'), {'role': UserRole.CUSTOMER}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_application_endpoints_are_closed(self):
+        for name in ('merchant-application', 'rider-application'):
+            response = self.client.post(reverse(name), {}, format='multipart')
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+            self.assertEqual(response.data['error_code'], 'SIGNUP_CLOSED')
+        self.assertFalse(MerchantApplication.objects.exists())
+        self.assertFalse(RiderApplication.objects.exists())
+
+    @override_settings(MARKETPLACE_SIGNUP_ENABLED=True)
+    def test_marketplace_mode_can_be_reopened(self):
+        response = self.client.post(reverse('select-onboarding-role'), {'role': UserRole.RIDER}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+def branch_account(**overrides):
+    values = {
+        'email': 'Branch1@Example.com',
+        'display_name': 'ครัวสาขา 1',
+        'phone_number': '0812345678',
+        'password': STAFF_PASSWORD,
+    }
+    values.update(overrides)
+    return AccountInput(**values)
+
+
+class CreateBranchTests(TestCase):
+    def create(self, account=None, **overrides):
+        values = {'name': 'ร้านทดสอบ สาขา 1', 'address': '1 ถนนทดสอบ', 'latitude': '12.9236', 'longitude': '100.8825'}
+        values.update(overrides)
+        return create_branch(account or branch_account(), **values)
+
+    def test_creates_merchant_user_and_branch_with_real_location(self):
+        branch = self.create()
+        self.assertEqual(branch.user.email, 'branch1@example.com')
+        self.assertEqual(branch.user.role, UserRole.MERCHANT)
+        self.assertTrue(branch.user.check_password(STAFF_PASSWORD))
+        self.assertAlmostEqual(branch.location.y, 12.9236, places=4)
+        self.assertAlmostEqual(branch.location.x, 100.8825, places=4)
+        self.assertFalse(branch.is_open)
+
+    def test_rejects_missing_or_fake_coordinates(self):
+        for lat, lng in (('0', '0'), ('abc', '100'), ('91', '100'), ('12', '181')):
+            with self.assertRaises(StaffAccountError):
+                self.create(latitude=lat, longitude=lng)
+        self.assertFalse(User.objects.filter(email='branch1@example.com').exists())
+
+    def test_rejects_weak_password(self):
+        with self.assertRaises(StaffAccountError):
+            self.create(account=branch_account(password='short'))
+        self.assertFalse(User.objects.exists())
+
+    def test_existing_email_requires_use_existing(self):
+        make_user(email='branch1@example.com', password=STAFF_PASSWORD, display_name='Old')
+        with self.assertRaises(StaffAccountError):
+            self.create()
+
+    def test_use_existing_keeps_password_and_never_converts_admin(self):
+        user = make_user(email='owner@example.com', password=STAFF_PASSWORD, display_name='Owner')
+        branch = self.create(account=branch_account(email='owner@example.com', password=None, use_existing=True))
+        self.assertEqual(branch.user.pk, user.pk)
+        self.assertTrue(branch.user.check_password(STAFF_PASSWORD))
+
+        make_user(email='admin@example.com', password=STAFF_PASSWORD, display_name='Admin', role=UserRole.ADMIN)
+        with self.assertRaises(StaffAccountError):
+            self.create(account=branch_account(email='admin@example.com', password=None, use_existing=True))
+        self.assertEqual(User.objects.get(email='admin@example.com').role, UserRole.ADMIN)
+
+    def test_second_branch_needs_its_own_account(self):
+        self.create()
+        second = self.create(account=branch_account(email='branch2@example.com'), name='ร้านทดสอบ สาขา 2')
+        self.assertEqual(second.user.email, 'branch2@example.com')
+
+
+class CreateRiderTests(TestCase):
+    def test_creates_ready_to_use_rider(self):
+        profile = create_rider(branch_account(email='rider@example.com', display_name='ไรเดอร์'), vehicle_plate='1กข 1234')
+        self.assertEqual(profile.user.role, UserRole.RIDER)
+        self.assertFalse(profile.is_online)
+        self.assertEqual(profile.vehicle_plate, '1กข 1234')
+
+    def test_requires_plate_and_phone(self):
+        with self.assertRaises(StaffAccountError):
+            create_rider(branch_account(email='rider@example.com'), vehicle_plate='  ')
+        with self.assertRaises(StaffAccountError):
+            create_rider(branch_account(email='rider@example.com', phone_number=''), vehicle_plate='1กข 1234')
+        self.assertFalse(User.objects.filter(email='rider@example.com').exists())
+
+    def test_rider_can_log_in_with_email_and_password(self):
+        create_rider(branch_account(email='rider@example.com'), vehicle_plate='1กข 1234')
+        response = APIClient().post(reverse('email-login'), {'email': 'rider@example.com', 'password': STAFF_PASSWORD}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class StaffCommandTests(TestCase):
+    def test_create_rider_command_reads_password_from_prompt(self):
+        out = StringIO()
+        with mock.patch('getpass.getpass', return_value=STAFF_PASSWORD):
+            call_command(
+                'create_rider', '--email', 'rider@example.com', '--display-name', 'ไรเดอร์',
+                '--phone', '0898765432', '--vehicle-plate', '1กข 1234', stdout=out,
+            )
+        self.assertTrue(User.objects.get(email='rider@example.com').check_password(STAFF_PASSWORD))
+
+    def test_create_branch_command_reports_error_without_traceback(self):
+        with mock.patch('getpass.getpass', return_value=STAFF_PASSWORD):
+            with self.assertRaises(CommandError):
+                call_command(
+                    'create_branch', '--email', 'b@example.com', '--display-name', 'ครัว', '--phone', '0812345678',
+                    '--name', 'สาขา', '--address', 'ที่อยู่', '--lat', '0', '--lng', '0', stdout=StringIO(),
+                )
