@@ -251,3 +251,92 @@ class RiderActiveJobTests(TestCase):
         self.assertIn('destination=18.79,98.986', maps_url)
         self.assertNotIn('18.7883', maps_url)
 
+
+
+# ---------------------------------------------------------------------------
+# Module 33 · S-2 — พิกัดไรเดอร์แบบสด + หน้าติดตาม
+# ---------------------------------------------------------------------------
+from datetime import timedelta
+from unittest import mock
+
+from django.core.cache import cache
+from django.utils import timezone
+
+
+class LiveLocationTests(TestCase):
+    def setUp(self):
+        RiderApiTests.setUp(self)  # ใช้ข้อมูลตั้งต้นชุดเดียวกัน แต่ไม่รัน test ของคลาสนั้นซ้ำ
+        cache.clear()
+        self.order.status = OrderStatus.DELIVERING
+        self.order.rider = self.rider_user_1
+        self.order.save()
+        self.location_url = reverse('rider-live-location')
+        self.tracking_url = reverse('order-tracking', args=[self.order.id])
+
+    def send(self, user=None, **payload):
+        self.client.force_authenticate(user=user or self.rider_user_1)
+        body = {'lat': 18.7891, 'lng': 98.9855, 'accuracy': 12, 'heading': 90}
+        body.update(payload)
+        return self.client.post(self.location_url, body, format='json')
+
+    def test_rider_location_is_visible_to_order_customer(self):
+        self.assertEqual(self.send().status_code, status.HTTP_200_OK)
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get(self.tracking_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rider = response.data['data']['rider']
+        self.assertAlmostEqual(rider['lat'], 18.7891)
+        self.assertEqual(rider['heading'], 90)
+        self.assertFalse(rider['is_stale'])
+        self.assertEqual(response.data['data']['merchant']['name'], self.merchant.name)
+
+    def test_rejects_invalid_or_inaccurate_location(self):
+        for payload in ({'lat': 0, 'lng': 0}, {'lat': 'x'}, {'lat': 95}, {'accuracy': 5000}, {'heading': 400}):
+            response = self.send(**payload)
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, payload)
+        self.client.force_authenticate(user=self.customer)
+        self.assertIsNone(self.client.get(self.tracking_url).data['data']['rider'])
+
+    def test_only_riders_can_send_location(self):
+        response = self.send(user=self.customer)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_other_users_cannot_track_order(self):
+        self.send()
+        stranger = User.objects.create(display_name='Stranger', role=UserRole.CUSTOMER)
+        for user in (stranger, self.rider_user_2):
+            self.client.force_authenticate(user=user)
+            response = self.client.get(self.tracking_url)
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertNotIn('data', response.data)
+
+    def test_merchant_of_order_can_track(self):
+        self.send()
+        self.client.force_authenticate(user=self.merchant_user)
+        self.assertIsNotNone(self.client.get(self.tracking_url).data['data']['rider'])
+
+    def test_location_hidden_once_order_is_completed(self):
+        self.send()
+        self.order.status = OrderStatus.COMPLETED
+        self.order.save()
+        self.client.force_authenticate(user=self.customer)
+        data = self.client.get(self.tracking_url).data['data']
+        self.assertIsNone(data['rider'])
+        self.assertEqual(data['rider_unavailable_reason'], 'NOT_DELIVERING')
+
+    def test_old_location_is_marked_stale(self):
+        self.send()
+        later = timezone.now() + timedelta(minutes=3)
+        self.client.force_authenticate(user=self.customer)
+        with mock.patch('django.utils.timezone.now', return_value=later):
+            rider = self.client.get(self.tracking_url).data['data']['rider']
+        self.assertTrue(rider['is_stale'])
+        self.assertGreaterEqual(rider['age_seconds'], 180)
+
+    def test_database_written_at_most_once_per_minute(self):
+        self.send(lat=18.70, lng=98.90)
+        self.send(lat=18.71, lng=98.91)
+        self.rider_profile_1.refresh_from_db()
+        self.assertAlmostEqual(float(self.rider_profile_1.current_latitude), 18.70)
+        self.client.force_authenticate(user=self.customer)
+        self.assertAlmostEqual(self.client.get(self.tracking_url).data['data']['rider']['lat'], 18.71)

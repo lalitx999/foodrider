@@ -332,3 +332,110 @@ class MerchantOrderReadyView(APIView):
             },
             'message': 'ปรับสถานะเป็น READY_FOR_PICKUP ปล่อยงานให้ไรเดอร์รับเรียบร้อยแล้ว'
         }, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Module 33 · S-2 — พิกัดไรเดอร์แบบสด + หน้าติดตามของลูกค้า
+# ---------------------------------------------------------------------------
+from apps.riders.live_location import (  # noqa: E402
+    LocationError,
+    get_live_location,
+    parse_location_payload,
+    save_live_location,
+)
+from apps.users.models import UserRole  # noqa: E402
+
+
+class RiderLiveLocationView(APIView):
+    """
+    POST /api/v1/rider/location/
+    รับพิกัดล่าสุดจากมือถือไรเดอร์ (~ทุก 5 วิระหว่างมีงาน) → เก็บใน cache
+    body: {lat, lng, accuracy?, heading?, speed?}
+    """
+    permission_classes = [HasRiderProfile]
+    throttle_scope = 'rider_location'
+
+    def post(self, request):
+        try:
+            payload = parse_location_payload(request.data)
+        except LocationError as error:
+            return Response({
+                'success': False,
+                'error_code': error.code,
+                'message': error.message,
+                'details': [{'field': error.field}] if error.field else [],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        location = save_live_location(request.user.rider_profile, payload)
+        return Response({
+            'success': True,
+            'data': {'updated_at': location.updated_at},
+            'message': 'บันทึกตำแหน่งแล้ว',
+        }, status=status.HTTP_200_OK)
+
+
+def _point(lat, lng):
+    lat, lng = to_coordinate(lat), to_coordinate(lng)
+    if lat is None or lng is None:
+        return None
+    return {'lat': lat, 'lng': lng}
+
+
+class OrderTrackingView(APIView):
+    """
+    GET /api/v1/orders/<uuid>/tracking/
+    ตำแหน่งไรเดอร์ของออเดอร์นี้ — เห็นได้เฉพาะลูกค้าเจ้าของออเดอร์ / ร้านของออเดอร์ / ไรเดอร์ที่รับงาน / แอดมิน
+    คืนพิกัดไรเดอร์เฉพาะตอนสถานะ DELIVERING เท่านั้น (ส่งเสร็จแล้วไม่เปิดเผยตำแหน่งต่อ)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_id):
+        order = Order.objects.select_related('merchant', 'rider').filter(id=order_id).first()
+        user = request.user
+        merchant_profile = getattr(user, 'merchant_profile', None)
+        can_view = order is not None and (
+            order.customer_id == user.id
+            or order.rider_id == user.id
+            or (merchant_profile is not None and order.merchant_id == merchant_profile.id)
+            or user.role == UserRole.ADMIN
+        )
+        if not can_view:
+            # ตอบ 404 เหมือนกันทั้ง "ไม่มี" และ "ไม่มีสิทธิ์" — ไม่บอกใบ้ว่า order id นี้มีอยู่จริง
+            return Response({
+                'success': False,
+                'error_code': 'ORDER_NOT_FOUND',
+                'message': 'ไม่พบคำสั่งซื้อที่ระบุ',
+                'details': [],
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        rider_payload = None
+        rider_reason = None
+        if order.status != OrderStatus.DELIVERING or order.rider_id is None:
+            rider_reason = 'NOT_DELIVERING'
+        else:
+            live = get_live_location(order.rider_id)
+            if live is None:
+                rider_reason = 'NO_RECENT_LOCATION'
+            else:
+                rider_payload = {
+                    **live.as_payload(),
+                    'name': order.rider.display_name,
+                    'phone': order.rider.phone_number,
+                }
+
+        return Response({
+            'success': True,
+            'data': {
+                'order_id': str(order.id),
+                'order_number': order.order_number,
+                'status': order.status,
+                'merchant': {
+                    **(_point(order.merchant.latitude, order.merchant.longitude) or {}),
+                    'name': order.merchant.name,
+                },
+                'destination': _point(order.delivery_latitude, order.delivery_longitude),
+                'rider': rider_payload,
+                'rider_unavailable_reason': rider_reason,
+            },
+            'message': 'ดึงตำแหน่งสำเร็จ',
+        }, status=status.HTTP_200_OK)

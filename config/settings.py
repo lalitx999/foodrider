@@ -144,8 +144,24 @@ REST_FRAMEWORK = {
         'quote': '120/hour',
         'admin': '1200/hour',
         'media': '600/hour',
+        # Module 33: มือถือไรเดอร์ส่งพิกัด ~ทุก 5 วิ (12/นาที) — เผื่อส่งซ้ำตอนกลับเข้าแอป
+        'rider_location': '40/min',
     },
 }
+
+# Cache — Module 33: พิกัดไรเดอร์แบบสด + throttle ต้องแชร์กันทุก gunicorn worker → ใช้ Redis บน production
+# ไม่ตั้ง REDIS_CACHE_URL (เช่นตอนรัน test / dev เครื่องเดียว) จะใช้ LocMem ของแต่ละ process แทน
+REDIS_CACHE_URL = env('REDIS_CACHE_URL', default='')
+if REDIS_CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_CACHE_URL,
+            'KEY_PREFIX': 'food',
+        }
+    }
+else:
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 
 # CORS Configuration
 # Production must explicitly list every frontend origin that may call this API.

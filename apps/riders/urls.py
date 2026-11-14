@@ -9,9 +9,13 @@ from apps.riders.views import (
     RiderJobHistoryView,
     RiderWalletView,
     RiderProfileDetailView,
+    RiderLiveLocationView,
+    OrderTrackingView,
 )
 
 urlpatterns = [
+    path('rider/location/', RiderLiveLocationView.as_view(), name='rider-live-location'),
+    path('orders/<uuid:order_id>/tracking/', OrderTrackingView.as_view(), name='order-tracking'),
     path('rider/status/', RiderStatusToggleView.as_view(), name='rider-status'),
     path('rider/profile/', RiderProfileDetailView.as_view(), name='rider-profile'),
     path('rider/orders/available/', AvailableJobsListView.as_view(), name='rider-jobs-available'),
