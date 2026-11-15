@@ -2,7 +2,7 @@
 สร้างบัญชีสาขา (ร้าน) และไรเดอร์โดยแอดมิน — Module 33 (ร้านเดียว ไม่ใช่ marketplace)
 
 แทนขั้นตอนสมัคร + ส่งเอกสาร + รออนุมัติ: เจ้าของร้านสร้างบัญชีให้เองผ่าน
-`manage.py create_branch` / `manage.py create_rider` (และหน้าแอดมินในอนาคตเรียกฟังก์ชันชุดนี้ได้เลย)
+`manage.py create_branch` / `manage.py create_rider` และหน้าแอดมิน `/admin/staff` (apps.backoffice)
 """
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -68,7 +68,7 @@ def _prepare_user(account: AccountInput, role: str) -> User:
     existing = User.objects.filter(email__iexact=email).first()
     if existing and not account.use_existing:
         raise StaffAccountError(
-            f'มีบัญชี {email} อยู่แล้ว — ถ้าต้องการใช้บัญชีนี้ให้เพิ่ม --use-existing'
+            f'มีบัญชี {email} อยู่แล้ว — ใช้อีเมลอื่น หรือเลือก "ใช้บัญชีเดิม" (คำสั่ง: --use-existing)'
         )
     if existing:
         if existing.role not in CONVERTIBLE_ROLES:
@@ -159,3 +159,64 @@ def create_rider(account: AccountInput, *, vehicle_plate: str):
         raise StaffAccountError(f'บัญชี {user.email} เป็นไรเดอร์อยู่แล้ว')
 
     return RiderProfile.objects.create(user=user, vehicle_plate=plate, is_online=False)
+
+
+# ---------- จัดการบัญชีที่สร้างแล้ว (หน้าแอดมิน) ----------
+
+# ออเดอร์ที่ยังไม่จบ — ปิดบัญชีระหว่างนี้แล้วร้าน/ไรเดอร์จะทำงานต่อไม่ได้
+OPEN_ORDER_STATUSES = ('PAID', 'PREPARING', 'READY_FOR_PICKUP', 'DELIVERING')
+
+
+def _revoke_sessions(user: User) -> None:
+    """ทำให้ refresh token ที่ออกไปแล้วใช้ไม่ได้ (ต้องล็อกอินใหม่) — access token ถูกปฏิเสธเองเมื่อ is_active=False"""
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    for token in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=token)
+
+
+@transaction.atomic
+def set_branch_active(merchant, active: bool):
+    """ปิด/เปิดการใช้งานสาขา — ไม่ลบข้อมูล (ออเดอร์เก่าต้องอยู่ครบ)"""
+    from apps.orders.models import Order
+
+    user = merchant.user
+    if not active:
+        if Order.objects.filter(merchant=merchant, status__in=OPEN_ORDER_STATUSES).exists():
+            raise StaffAccountError('สาขานี้ยังมีออเดอร์ที่ทำไม่เสร็จ — รอให้จบก่อนค่อยปิดการใช้งาน')
+        merchant.is_open = False
+        merchant.save(update_fields=['is_open', 'updated_at'])
+        _revoke_sessions(user)
+    user.is_active = active
+    user.save(update_fields=['is_active'])
+    return merchant
+
+
+@transaction.atomic
+def set_rider_active(rider_profile, active: bool):
+    """ปิด/เปิดการใช้งานไรเดอร์ — ไม่ลบข้อมูล (ประวัติงาน/รายได้ต้องอยู่ครบ)"""
+    from apps.orders.models import Order
+    from apps.riders.live_location import clear_live_location
+
+    user = rider_profile.user
+    if not active:
+        if Order.objects.filter(rider=user, status__in=OPEN_ORDER_STATUSES).exists():
+            raise StaffAccountError('ไรเดอร์คนนี้ยังมีงานที่ส่งไม่เสร็จ — รอให้จบก่อนค่อยปิดการใช้งาน')
+        rider_profile.is_online = False
+        rider_profile.save(update_fields=['is_online', 'updated_at'])
+        clear_live_location(user.pk)
+        _revoke_sessions(user)
+    user.is_active = active
+    user.save(update_fields=['is_active'])
+    return rider_profile
+
+
+@transaction.atomic
+def reset_staff_password(user: User, password: str) -> None:
+    """แอดมินตั้งรหัสผ่านใหม่ให้สาขา/ไรเดอร์ (เช่น ลืมรหัส) — เครื่องที่ล็อกอินค้างไว้ต้องล็อกอินใหม่"""
+    if user.role not in (UserRole.MERCHANT, UserRole.RIDER):
+        raise StaffAccountError('ตั้งรหัสผ่านใหม่ได้เฉพาะบัญชีสาขาและไรเดอร์')
+    _validate_new_password(password or '', user)
+    user.set_password(password)
+    user.save(update_fields=['password'])
+    _revoke_sessions(user)

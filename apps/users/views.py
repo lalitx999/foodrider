@@ -156,6 +156,14 @@ class GoogleVerifyView(APIView):
         try:
             google_user_data = verify_google_id_token(id_token)
             user = get_or_create_google_user(google_user_data)
+            if not user.is_active:
+                # บัญชีที่แอดมินปิดการใช้งาน (Module 33) — ห้ามออก token ทางนี้เหมือนล็อกอินด้วยรหัสผ่าน
+                return Response({
+                    'success': False,
+                    'error_code': 'ACCOUNT_DISABLED',
+                    'message': 'บัญชีนี้ถูกปิดการใช้งาน กรุณาติดต่อร้าน',
+                    'details': []
+                }, status=status.HTTP_403_FORBIDDEN)
             tokens = generate_jwt_tokens(user)
 
             return Response({
