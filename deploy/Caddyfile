@@ -1,0 +1,6 @@
+# Caddy: รับ HTTPS จากภายนอก (ขอใบรับรอง Let's Encrypt ให้เองและต่ออายุเอง)
+# แล้วส่งต่อให้ nginx ที่จัดการ static / media / X-Accel-Redirect ต่อ
+{$API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy nginx:80
+}

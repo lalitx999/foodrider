@@ -129,6 +129,9 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
     ),
+    # จำนวน proxy หน้า Django (production: Caddy + nginx = 2) — ให้ throttle ใช้ IP ลูกค้าจริง
+    # ไม่ใช่ทั้งสาย X-Forwarded-For ที่ลูกค้าปลอมต่อหน้าได้
+    'NUM_PROXIES': env.int('DRF_NUM_PROXIES', default=None),
     # Throttling (P0-09): ป้องกันการยิงถล่ม login / อัปโหลดสลิป / quote
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.AnonRateThrottle',

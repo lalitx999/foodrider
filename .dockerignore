@@ -1,0 +1,12 @@
+# ไม่ให้ความลับ / ข้อมูลจริง / venv ติดเข้าไปใน image
+.env
+*.env
+firebase-config.json
+venv/
+media/
+private_media/
+staticfiles/
+.git/
+**/__pycache__/
+*.pyc
+deploy/
