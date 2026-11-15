@@ -67,7 +67,7 @@ class UploadSlipSerializer(serializers.Serializer):
     def validate_slip_image(self, f):
         max_bytes = int(getattr(settings, 'SLIP_MAX_FILE_BYTES', 5 * 1024 * 1024))
         if f.size > max_bytes:
-            raise serializers.ValidationError('ไฟล์สลิปต้องมีขนาดไม่เกิน 5MB')
+            raise serializers.ValidationError(f'ไฟล์สลิปต้องมีขนาดไม่เกิน {max_bytes / (1024 * 1024):g}MB')
         if getattr(f, 'content_type', '') not in ALLOWED_SLIP_CONTENT_TYPES:
             raise serializers.ValidationError('รองรับเฉพาะไฟล์รูปภาพ JPG, PNG หรือ WEBP')
 

@@ -29,8 +29,11 @@ def create_promptpay_qr(amount) -> tuple[str, str]:
         proxy = _field('01', '0066' + account[1:])
     elif account.isdigit() and len(account) == 13:
         proxy = _field('02', account)
+    elif account.isdigit() and len(account) == 15:
+        # e-Wallet ID / พร้อมเพย์ผูกบัญชีของ K PLUS (ตัวเลข "เลขที่อ้างอิง" ใต้ QR รับเงิน)
+        proxy = _field('03', account)
     else:
-        raise ValueError('PromptPay ต้องเป็นเบอร์โทร 10 หลักหรือเลขประจำตัว 13 หลัก')
+        raise ValueError('PromptPay ต้องเป็นเบอร์โทร 10 หลัก เลขประจำตัว 13 หลัก หรือ e-Wallet ID 15 หลัก')
     merchant_info = _field('00', 'A000000677010111') + proxy
     payload = ''.join([_field('00', '01'), _field('01', '12'), _field('29', merchant_info), _field('53', '764'), _field('54', f'{normalized_amount:.2f}'), _field('58', 'TH'), '6304'])
     payload += _crc16(payload)

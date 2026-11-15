@@ -24,6 +24,16 @@ from apps.users.media_tokens import make_media_token
 from apps.users.models import CustomerProfile, User, UserRole
 
 
+# บัญชีรับเงินของร้านในการทดสอบ (กสิกร + พร้อมเพย์ e-Wallet) — ไม่ใช่ค่าจริงจาก .env
+SHOP_ENV = {
+    'SHOP_BANK_CODE': '004',
+    'SHOP_BANK_ACCOUNT': '210-8-58346-3',
+    'PLATFORM_PROMPTPAY_ACCOUNT': '004999214548470',
+    'SHOP_ACCOUNT_NAMES': 'ทีเอ็มดับเบิ้ลพี,TMWP',
+    'SLIP_VERIFY_API_KEY': '00000000-0000-4000-8000-000000000000',
+}
+
+
 def make_slip_image(name='slip.png'):
     """สร้างรูป PNG จริงเพื่อผ่านการตรวจ magic bytes (PIL)"""
     buffer = BytesIO()
@@ -41,6 +51,9 @@ class BaseSlipTestCase(TestCase):
         self.addCleanup(shutil.rmtree, slip_dir, True)
 
         cache.clear()  # กัน throttle สะสมข้าม test
+        env = patch.dict(os.environ, SHOP_ENV)
+        env.start()
+        self.addCleanup(env.stop)
         self.client = APIClient()
         self.customer = User.objects.create(
             display_name='ลูกค้า ทดสอบ', email='customer-slip@example.com', role=UserRole.CUSTOMER
@@ -393,15 +406,20 @@ class SlipReviewTests(BaseSlipTestCase):
         self.assertEqual(response.data['error_code'], 'INVALID_STATUS')
 
 
-def _provider_payload(amount='245.00', trans_ref='PROVIDER-REF-0001'):
-    return {
+def _provider_payload(amount='245.00', trans_ref='PROVIDER-REF-0001', **overrides):
+    payload = {
         'is_success': True,
         'trans_ref': trans_ref,
         'amount': amount,
-        # ต้องตรงกับบัญชี PromptPay ของแพลตฟอร์ม (ถ้ามีการตั้งค่า env ไว้)
-        'receiving_account': os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT') or '0000000000',
+        'receiver_bank_code': '004',
+        'receiver_accounts': ['xxx-x-x8346-x'],
+        'receiving_account': 'xxx-x-x8346-x',
+        'receiver_names': ['ทีเอ็มดับเบิ้ลพี'],
+        'is_duplicate': False,
         'raw_payload': {'source': 'test'},
     }
+    payload.update(overrides)
+    return payload
 
 
 class ApiModeSlipTests(BaseSlipTestCase):
@@ -461,3 +479,200 @@ class ApiModeSlipTests(BaseSlipTestCase):
         self.assertEqual(slip.status, SlipStatus.PENDING)
         self.assertEqual(slip.raw_payload.get('mode'), 'HYBRID')
 
+
+
+class ReceiverAndDuplicateTests(BaseSlipTestCase):
+    """S-4: สลิปต้องโอนเข้าบัญชีร้านจริง · ไม่ตั้งค่าบัญชีร้าน = ไม่อนุมัติอัตโนมัติ · สลิปซ้ำถูกปฏิเสธ"""
+
+    def _api_upload(self, payload):
+        with self.settings(PAYMENT_VERIFICATION_MODE='API'), \
+                patch('apps.payments.services.call_slip_verify_api', return_value=payload), \
+                patch('apps.payments.services.create_and_send_notification'):
+            return self._upload_slip()
+
+    def _assert_rejected(self, response):
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderStatus.PENDING_PAYMENT)
+
+    def test_promptpay_ewallet_receiver_is_accepted(self):
+        response = self._api_upload(_provider_payload(
+            receiver_bank_code='004', receiver_accounts=['xxx-x-x8346-x', '004xxxxxxxx8470']
+        ))
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['data']['order_status'], OrderStatus.PAID)
+
+    def test_transfer_to_someone_else_is_rejected(self):
+        self._assert_rejected(self._api_upload(_provider_payload(receiver_accounts=['xxx-x-x1234-x'])))
+        self.assertIn('ไม่ได้โอนเข้าบัญชีของร้าน', SlipTransaction.objects.get().reject_reason)
+
+    def test_same_last_digits_at_other_bank_is_rejected(self):
+        self._assert_rejected(self._api_upload(_provider_payload(receiver_bank_code='014')))
+
+    def test_slip_without_receiver_account_is_rejected(self):
+        self._assert_rejected(self._api_upload(_provider_payload(receiver_accounts=[], receiving_account=None)))
+
+    def test_no_shop_account_configured_never_auto_approves(self):
+        with patch.dict(os.environ, {'SHOP_BANK_ACCOUNT': '', 'PLATFORM_PROMPTPAY_ACCOUNT': ''}):
+            self._assert_rejected(self._api_upload(_provider_payload()))
+
+    def test_receiver_name_must_match_shop(self):
+        self._assert_rejected(self._api_upload(_provider_payload(receiver_names=['นาย สมชาย ใจดี'])))
+        self.assertIn('ชื่อผู้รับ', SlipTransaction.objects.get().reject_reason)
+
+    def test_slip_without_receiver_name_is_rejected(self):
+        self._assert_rejected(self._api_upload(_provider_payload(receiver_names=[])))
+
+    def test_no_shop_name_configured_never_auto_approves(self):
+        with patch.dict(os.environ, {'SHOP_ACCOUNT_NAMES': ''}):
+            self._assert_rejected(self._api_upload(_provider_payload()))
+
+    def test_provider_duplicate_flag_is_rejected(self):
+        self._assert_rejected(self._api_upload(_provider_payload(is_duplicate=True)))
+
+    def test_hybrid_wrong_receiver_goes_to_admin(self):
+        with self.settings(PAYMENT_VERIFICATION_MODE='HYBRID'), \
+                patch('apps.payments.services.call_slip_verify_api',
+                      return_value=_provider_payload(receiver_accounts=['xxx-x-x1234-x'])), \
+                patch('apps.payments.services.create_and_send_notification'):
+            response = self._upload_slip()
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['data']['slip_status'], SlipStatus.PENDING)
+
+
+class MaskedAccountTests(TestCase):
+    def test_matching_rules(self):
+        from apps.payments.services import masked_account_matches
+
+        self.assertTrue(masked_account_matches('xxx-x-x8346-x', '2108583463'))
+        self.assertTrue(masked_account_matches('004xxxxxxxx8470', '004999214548470'))
+        self.assertFalse(masked_account_matches('xxx-x-x8347-x', '2108583463'))
+        self.assertFalse(masked_account_matches('xxx-x-xxx46-x', '2108583463'))  # เห็นน้อยกว่า 4 หลัก
+        self.assertFalse(masked_account_matches('', '2108583463'))
+        self.assertFalse(masked_account_matches('xxx-x-x8346-x', ''))
+
+
+EASYSLIP_V2_SUCCESS = {
+    'success': True,
+    'message': 'Bank slip verified successfully',
+    'data': {
+        'isDuplicate': False,
+        'matchedAccount': None,
+        'amountInSlip': 245.0,
+        'rawSlip': {
+            'transRef': '68370160657749I376388B35',
+            'date': '2024-01-15T14:30:00+07:00',
+            'amount': {'amount': 245.0, 'local': {'amount': 245.0, 'currency': 'THB'}},
+            'sender': {
+                'bank': {'id': '014', 'name': 'ไทยพาณิชย์', 'short': 'SCB'},
+                'account': {'name': {'th': 'นาย ผู้โอน ทดสอบ'}, 'bank': {'type': 'BANKAC', 'account': '123-4-xxxxx-5'}},
+            },
+            'receiver': {
+                'bank': {'id': '004', 'name': 'กสิกรไทย', 'short': 'KBANK'},
+                'account': {
+                    'name': {'th': 'ทีเอ็มดับเบิ้ลพี'},
+                    'bank': {'type': 'BANKAC', 'account': 'xxx-x-x8346-x'},
+                    'proxy': {'type': 'EWALLETID', 'account': '004xxxxxxxx8470'},
+                },
+            },
+        },
+    },
+}
+
+
+class FakeResponse:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class ReceiverNameTests(TestCase):
+    def test_matching_rules(self):
+        from apps.payments.services import receiver_name_matches
+
+        shop = ['ทีเอ็มดับเบิ้ลพี', 'tmwp']
+        self.assertTrue(receiver_name_matches(['ทีเอ็มดับเบิ้ลพี'], shop))
+        self.assertTrue(receiver_name_matches(['ร้าน ทีเอ็ม ดับเบิ้ลพี'], shop))  # คำนำหน้า + ช่องว่าง
+        self.assertTrue(receiver_name_matches(['T.M.W.P.'], shop))
+        self.assertTrue(receiver_name_matches(['ทีเอ็มดับเบิ้'], shop))  # ธนาคารตัดชื่อยาว
+        self.assertFalse(receiver_name_matches(['นาย สมชาย ใจดี'], shop))
+        self.assertFalse(receiver_name_matches(['ที'], shop))  # สั้นเกินจะเชื่อได้
+        self.assertFalse(receiver_name_matches([], shop))
+
+
+class EasySlipClientTests(TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {**SHOP_ENV, 'SLIP_VERIFY_API_URL': ''})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def _call(self, response):
+        from apps.payments.services import call_slip_verify_api
+
+        with patch('apps.payments.services.requests.post', return_value=response) as post:
+            result = call_slip_verify_api(make_slip_image(), expected_amount=Decimal('245.00'), remark='ORD-1')
+        return result, post
+
+    def test_success_is_normalized_and_request_follows_v2_contract(self):
+        result, post = self._call(FakeResponse(200, EASYSLIP_V2_SUCCESS))
+        self.assertEqual(result['trans_ref'], '68370160657749I376388B35')
+        self.assertEqual(result['amount'], '245.0')
+        self.assertEqual(result['receiver_bank_code'], '004')
+        self.assertEqual(result['receiver_accounts'], ['xxx-x-x8346-x', '004xxxxxxxx8470'])
+        self.assertEqual(result['sending_bank'], 'SCB')
+        self.assertEqual(result['receiver_names'], ['ทีเอ็มดับเบิ้ลพี'])
+        self.assertFalse(result['is_duplicate'])
+
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], 'https://api.easyslip.com/v2/verify/bank')
+        self.assertEqual(kwargs['headers']['Authorization'], f"Bearer {SHOP_ENV['SLIP_VERIFY_API_KEY']}")
+        self.assertIn('image', kwargs['files'])
+        self.assertEqual(kwargs['data']['checkDuplicate'], 'true')
+        self.assertEqual(kwargs['data']['matchAmount'], '245.00')
+        self.assertEqual(kwargs['data']['remark'], 'ORD-1')
+
+    def test_normalized_slip_passes_order_check(self):
+        from apps.payments.services import _check_slip_against_order
+
+        result, _ = self._call(FakeResponse(200, EASYSLIP_V2_SUCCESS))
+        order = type('O', (), {'total_amount': Decimal('245.00')})()
+        self.assertEqual(_check_slip_against_order(result, order), Decimal('245.00'))
+
+    def test_slip_problems_raise_customer_facing_error(self):
+        from apps.payments.services import SlipVerificationError
+
+        for code in ('SLIP_NOT_FOUND', 'slip_pending', 'INVALID_IMAGE_FORMAT'):
+            with self.assertRaises(SlipVerificationError):
+                self._call(FakeResponse(404, {'success': False, 'error': {'code': code, 'message': 'x'}}))
+
+    def test_provider_problems_raise_provider_error(self):
+        from apps.payments.services import SlipProviderError
+
+        for status_code, code in ((403, 'QUOTA_EXCEEDED'), (401, 'INVALID_API_KEY'), (403, 'IP_NOT_ALLOWED'), (500, 'API_SERVER_ERROR')):
+            with self.assertRaises(SlipProviderError):
+                self._call(FakeResponse(status_code, {'success': False, 'error': {'code': code, 'message': 'x'}}))
+
+    def test_missing_key_is_provider_error(self):
+        from apps.payments.services import SlipProviderError, call_slip_verify_api
+
+        with patch.dict(os.environ, {'SLIP_VERIFY_API_KEY': ''}), patch('apps.payments.services.requests.post') as post:
+            with self.assertRaises(SlipProviderError):
+                call_slip_verify_api(make_slip_image())
+        post.assert_not_called()
+
+
+class PromptPayQrTests(TestCase):
+    def test_ewallet_id_builds_tag_03(self):
+        from apps.payments import promptpay
+
+        with patch.dict(os.environ, {'PLATFORM_PROMPTPAY_ACCOUNT': '004999214548470'}), \
+                patch.object(promptpay.qrcode, 'make', wraps=promptpay.qrcode.make) as make:
+            _, account = promptpay.create_promptpay_qr('245.00')
+        payload = make.call_args[0][0]
+        self.assertEqual(account, '004999214548470')
+        self.assertIn('29390016A000000677010111' + '0315004999214548470', payload)
+        self.assertIn('5406245.00', payload)
+        self.assertEqual(promptpay._crc16(payload[:-4]), payload[-4:])

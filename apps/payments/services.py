@@ -1,5 +1,6 @@
 import logging
 import os
+import unicodedata
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -29,56 +30,223 @@ class SlipReviewError(Exception):
         self.code = code
 
 
-def call_slip_verify_api(image_file) -> dict:
-    """
-    ยิงไปตรวจสอบสลิปโอนเงินกับ Slip Verification API ภายนอก (SlipOK / OpenSlip)
-    """
-    api_url = os.environ.get('SLIP_VERIFY_API_URL')
-    api_key = os.environ.get('SLIP_VERIFY_API_KEY')
+EASYSLIP_V2_URL = 'https://api.easyslip.com/v2/verify/bank'
+PLACEHOLDER_KEYS = {'', 'your_slip_verify_api_key', 'replace-with-slip-provider-key'}
 
-    if not api_url or not api_key or api_key == 'your_slip_verify_api_key':
-        raise SlipVerificationError('ยังไม่ได้ตั้งค่าผู้ให้บริการตรวจสอบสลิป')
+# error code จาก EasySlip ที่เป็นปัญหาของ "สลิป" (บอกลูกค้าได้) — โค้ดอื่น (คีย์/โควต้า/IP/ระบบล่ม) เป็นปัญหาฝั่งเรา
+SLIP_PROBLEM_MESSAGES = {
+    'SLIP_NOT_FOUND': 'อ่าน QR บนสลิปไม่ได้ หรือไม่พบรายการโอนนี้ — ถ่ายสลิปให้เห็น QR ชัดๆ แล้วลองใหม่',
+    'QRCODE_NOT_FOUND': 'ไม่พบ QR บนสลิป — ใช้รูปสลิปจากแอปธนาคารโดยตรง',
+    'SLIP_PENDING': 'ธนาคารยังไม่ยืนยันรายการนี้ (สลิปกรุงเทพต้องรอประมาณ 5 นาที) — ลองส่งใหม่อีกครั้ง',
+    'SLIP_EXPIRED': 'สลิปนี้เก่าเกินกว่าจะตรวจสอบได้',
+    'INVALID_IMAGE_FORMAT': 'ไฟล์นี้ไม่ใช่รูปภาพที่ระบบอ่านได้ (ใช้ JPG / PNG)',
+    'INVALID_IMAGE': 'ไฟล์นี้ไม่ใช่รูปภาพที่ระบบอ่านได้ (ใช้ JPG / PNG)',
+    'IMAGE_SIZE_TOO_LARGE': 'รูปสลิปใหญ่เกิน 4MB',
+    'DUPLICATE_SLIP': 'สลิปนี้ถูกนำมาใช้งานในระบบไปแล้ว (Double Spending Detected)',
+}
+
+
+class SlipProviderError(Exception):
+    """ผู้ให้บริการตรวจสลิปใช้งานไม่ได้ (คีย์ผิด/โควต้าหมด/IP ไม่อนุญาต/ระบบล่ม) — ไม่ใช่ความผิดของสลิป"""
+
+
+def call_slip_verify_api(image_file, *, expected_amount=None, remark: str = '') -> dict:
+    """
+    ตรวจสลิปกับ EasySlip API V2 — POST /v2/verify/bank (multipart field `image`)
+    https://document.easyslip.com/th/v2/verify/bank/image
+
+    คืน dict รูปแบบกลางของระบบ (ไม่ผูกกับผู้ให้บริการ) ให้ `_check_slip_against_order` ตรวจต่อ
+    - สลิปมีปัญหา → SlipVerificationError (ข้อความบอกลูกค้าได้)
+    - ผู้ให้บริการใช้ไม่ได้ → SlipProviderError (โหมด HYBRID จะส่งให้แอดมินตรวจแทน)
+    """
+    api_url = os.environ.get('SLIP_VERIFY_API_URL') or EASYSLIP_V2_URL
+    api_key = (os.environ.get('SLIP_VERIFY_API_KEY') or '').strip()
+    if api_key in PLACEHOLDER_KEYS:
+        raise SlipProviderError('ยังไม่ได้ตั้งค่า SLIP_VERIFY_API_KEY')
+
+    form = {'checkDuplicate': 'true', 'matchAccount': 'true'}
+    if expected_amount is not None:
+        form['matchAmount'] = str(expected_amount)
+    if remark:
+        form['remark'] = remark[:255]
+
+    filename = getattr(image_file, 'name', None) or 'slip.jpg'
+    content_type = getattr(image_file, 'content_type', None) or 'image/jpeg'
+    try:
+        response = requests.post(
+            api_url,
+            headers={'Authorization': f'Bearer {api_key}'},
+            files={'image': (os.path.basename(filename), image_file, content_type)},
+            data=form,
+            timeout=20,
+        )
+    except requests.RequestException as error:
+        raise SlipProviderError(f'เชื่อมต่อ EasySlip ไม่ได้: {error}') from error
 
     try:
-        headers = {'x-authorization': api_key}
-        files = {'files': image_file}
-        response = requests.post(api_url, headers=headers, files=files, timeout=15)
-        
-        if response.status_code != 200:
-            raise SlipVerificationError("ไม่สามารถเชื่อมต่อระบบตรวจสอบสลิปได้")
+        body = response.json()
+    except ValueError:
+        raise SlipProviderError(f'EasySlip ตอบกลับไม่ใช่ JSON (HTTP {response.status_code})')
 
-        res_data = response.json()
-        if not res_data.get('success', False):
-            raise SlipVerificationError(res_data.get('message', 'สลิปไม่ถูกต้อง หรือไม่สามารถอ่าน QR Code ได้'))
+    if response.status_code != 200 or not body.get('success'):
+        error = body.get('error') if isinstance(body.get('error'), dict) else {}
+        code = str(error.get('code') or body.get('message') or '').upper()
+        if code in SLIP_PROBLEM_MESSAGES:
+            raise SlipVerificationError(SLIP_PROBLEM_MESSAGES[code])
+        raise SlipProviderError(f'EasySlip error HTTP {response.status_code} {code or "-"}')
 
-        data = res_data.get('data', {})
-        return {
-            'is_success': True,
-            'trans_ref': data.get('transRef'),
-            'sending_bank': data.get('sendingBank'),
-            'receiving_bank': data.get('receivingBank'),
-            'sender_name': data.get('sender', {}).get('displayName'),
-            'amount': str(data.get('amount', 0)),
-            'receiving_account': data.get('receiver', {}).get('proxy', {}).get('value'),
-            'raw_payload': res_data
-        }
-    except requests.RequestException as e:
-        raise SlipVerificationError(f"เกิดข้อผิดพลาดในการเชื่อมต่อระบบตรวจสลิป: {str(e)}")
+    return normalize_easyslip_v2(body)
+
+
+def normalize_easyslip_v2(body: dict) -> dict:
+    """แปลง response V2 (`data.rawSlip`) เป็นรูปแบบกลาง"""
+    data = body.get('data') or {}
+    raw = data.get('rawSlip') or {}
+    sender = raw.get('sender') or {}
+    receiver = raw.get('receiver') or {}
+    receiver_account = receiver.get('account') or {}
+    receiver_bank = receiver.get('bank') or {}
+    sender_name = (sender.get('account') or {}).get('name') or {}
+    receiver_name = receiver_account.get('name') or {}
+
+    accounts = []
+    for key in ('bank', 'proxy'):
+        value = (receiver_account.get(key) or {}).get('account')
+        if value:
+            accounts.append(str(value))
+
+    amount = (raw.get('amount') or {}).get('amount')
+    if amount is None:
+        amount = data.get('amountInSlip')
+
+    return {
+        'is_success': True,
+        'trans_ref': raw.get('transRef'),
+        'sending_bank': (sender.get('bank') or {}).get('short'),
+        'receiving_bank': receiver_bank.get('short'),
+        'receiver_bank_code': receiver_bank.get('id'),
+        'sender_name': sender_name.get('th') or sender_name.get('en'),
+        'amount': str(amount) if amount is not None else None,
+        'receiver_accounts': accounts,
+        'receiver_names': [name for name in (receiver_name.get('th'), receiver_name.get('en')) if name],
+        'receiving_account': accounts[0] if accounts else None,
+        'account_matched': data.get('matchedAccount') is not None,
+        'is_duplicate': bool(data.get('isDuplicate')),
+        'raw_payload': body,
+    }
+
+
+def _digits(value) -> str:
+    return ''.join(ch for ch in str(value or '') if ch.isdigit())
+
+
+def masked_account_matches(masked: str, actual: str) -> bool:
+    """
+    เทียบเลขบัญชีแบบปิดบังในสลิป (เช่น `xxx-x-x8346-x`) กับเลขจริง (`2108583463`)
+    เทียบชิดขวาทีละหลัก: ทุกหลักที่เห็นต้องตรง และต้องเห็นอย่างน้อย 4 หลัก
+    """
+    pattern = ''.join(ch.lower() for ch in str(masked or '') if ch.isdigit() or ch.lower() == 'x')
+    target = _digits(actual)
+    if not pattern or not target:
+        return False
+    visible = 0
+    for slip_char, real_char in zip(reversed(pattern), reversed(target)):
+        if slip_char == 'x':
+            continue
+        if slip_char != real_char:
+            return False
+        visible += 1
+    return visible >= 4
+
+
+def shop_receiving_accounts() -> list[tuple[str | None, str]]:
+    """บัญชีรับเงินของร้าน [(รหัสธนาคาร | None, เลข)] — บัญชีธนาคาร + พร้อมเพย์ที่ใช้สร้าง QR"""
+    accounts = []
+    bank_account = _digits(os.environ.get('SHOP_BANK_ACCOUNT'))
+    if bank_account:
+        accounts.append(((os.environ.get('SHOP_BANK_CODE') or '').strip() or None, bank_account))
+    promptpay = _digits(os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT'))
+    if promptpay:
+        accounts.append((None, promptpay))
+    return accounts
+
+
+def _receiver_is_shop(slip_data: dict) -> bool:
+    shop_accounts = shop_receiving_accounts()
+    if not shop_accounts:
+        # ไม่ตั้งค่าบัญชีร้าน = ห้ามอนุมัติอัตโนมัติ (เดิมข้ามการตรวจไปเลย ทำให้สลิปโอนเข้าบัญชีใครก็ผ่าน)
+        raise SlipVerificationError('ระบบยังไม่ได้ตั้งค่าบัญชีรับเงินของร้าน — ส่งให้แอดมินตรวจ')
+    receiver_bank = (slip_data.get('receiver_bank_code') or '').strip()
+    slip_accounts = slip_data.get('receiver_accounts') or (
+        [slip_data['receiving_account']] if slip_data.get('receiving_account') else []
+    )
+    for masked in slip_accounts:
+        for bank_code, number in shop_accounts:
+            if bank_code and receiver_bank and bank_code != receiver_bank:
+                continue
+            if masked_account_matches(masked, number):
+                return True
+    return False
+
+
+NAME_PREFIXES = (
+    'นางสาว', 'น.ส.', 'นาย', 'นาง', 'บริษัท', 'บจก.', 'หจก.', 'ร้าน',
+    'mr.', 'mrs.', 'ms.', 'miss', 'mr', 'mrs', 'ms', 'co.,ltd.', 'company limited',
+)
+MIN_NAME_CHARS = 4
+
+
+def _normalize_name(value) -> str:
+    text = str(value or '').strip().lower()
+    for prefix in NAME_PREFIXES:
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    # เก็บสระ/วรรณยุกต์ไทย (Unicode หมวด M) ไว้ด้วย — isalnum() ตัดทิ้ง ทำให้ชื่อต่างกันดูเหมือนกัน
+    return ''.join(ch for ch in text if ch.isalnum() or unicodedata.category(ch).startswith('M'))
+
+
+def shop_account_names() -> list[str]:
+    """ชื่อบัญชีรับเงินของร้าน (คั่นด้วย , ได้หลายชื่อ เช่นชื่อไทย + อังกฤษ)"""
+    raw = os.environ.get('SHOP_ACCOUNT_NAMES') or ''
+    return [name for name in (_normalize_name(item) for item in raw.split(',')) if len(name) >= MIN_NAME_CHARS]
+
+
+def receiver_name_matches(slip_names, shop_names) -> bool:
+    """
+    ชื่อผู้รับในสลิปต้องตรงกับชื่อบัญชีร้าน — ไม่สนคำนำหน้า/ช่องว่าง/จุด/ตัวพิมพ์
+    บางธนาคารตัดชื่อยาวให้สั้นลง จึงยอมให้ชื่อหนึ่งเป็นส่วนต้นของอีกชื่อ (อย่างน้อย 4 ตัวอักษร)
+    """
+    for raw in slip_names or []:
+        slip = _normalize_name(raw)
+        if len(slip) < MIN_NAME_CHARS:
+            continue
+        for shop in (_normalize_name(name) for name in shop_names):
+            if len(shop) < MIN_NAME_CHARS:
+                continue
+            if slip == shop or shop.startswith(slip) or slip.startswith(shop):
+                return True
+    return False
 
 
 def _check_slip_against_order(slip_data: dict, order: Order) -> Decimal:
-    """ตรวจสลิปซ้ำ / บัญชีผู้รับ / ยอดเงิน (Decimal equality) — คืนยอดเงินที่อ่านได้"""
+    """ตรวจสลิปซ้ำ / บัญชีผู้รับ / ชื่อผู้รับ / ยอดเงิน (Decimal equality) — ต้องตรงทั้งหมด คืนยอดเงินที่อ่านได้"""
     trans_ref = slip_data.get('trans_ref')
     if not trans_ref:
         raise SlipVerificationError('ไม่พบรหัสอ้างอิงธุรกรรมในสลิป')
 
-    if SlipTransaction.objects.filter(trans_ref=trans_ref).exists():
+    if SlipTransaction.objects.filter(trans_ref=trans_ref).exists() or slip_data.get('is_duplicate'):
+        # is_duplicate: EasySlip เคยตรวจสลิปนี้แล้ว (เช่นเคยผ่านแอดมินตรวจมือที่ไม่ได้เก็บ transRef จริง)
         raise SlipVerificationError('สลิปนี้ถูกนำมาใช้งานในระบบไปแล้ว (Double Spending Detected)')
 
-    system_account = os.environ.get('PLATFORM_PROMPTPAY_ACCOUNT')
-    receiving_account = slip_data.get('receiving_account')
-    if system_account and receiving_account and receiving_account != system_account:
-        raise SlipVerificationError('ยอดเงินในสลิปไม่ได้โอนเข้าบัญชี PromptPay ของแพลตฟอร์ม')
+    if not _receiver_is_shop(slip_data):
+        raise SlipVerificationError('สลิปนี้ไม่ได้โอนเข้าบัญชีของร้าน')
+
+    shop_names = shop_account_names()
+    if not shop_names:
+        raise SlipVerificationError('ระบบยังไม่ได้ตั้งค่าชื่อบัญชีรับเงินของร้าน — ส่งให้แอดมินตรวจ')
+    if not receiver_name_matches(slip_data.get('receiver_names'), shop_names):
+        raise SlipVerificationError('ชื่อผู้รับในสลิปไม่ตรงกับชื่อบัญชีของร้าน')
 
     try:
         amount = Decimal(str(slip_data.get('amount')))
@@ -144,7 +312,9 @@ def verify_and_process_order_slip(order: Order, slip_image, slip_image_url: str)
 
     if mode in {'API', 'HYBRID'}:
         try:
-            slip_data = call_slip_verify_api(slip_image)
+            slip_data = call_slip_verify_api(
+                slip_image, expected_amount=order.total_amount, remark=order.order_number
+            )
             _check_slip_against_order(slip_data, order)
         except SlipVerificationError as exc:
             provider_failure = str(exc)
