@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'apps.payments',
     'apps.riders',
     'apps.notifications',
+    'apps.backoffice',  # หลังบ้านแอดมิน + AdminAuditLog (Module 32 เฟส B)
 ]
 
 

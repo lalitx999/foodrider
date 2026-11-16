@@ -11,6 +11,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.backoffice.audit import record_admin_action
 from apps.merchants.models import Merchant
 from apps.riders.live_location import get_live_location
 from apps.riders.models import RiderProfile
@@ -59,6 +60,10 @@ def _account_from(data, *, default_display_name=''):
         use_existing=use_existing,
     )
     return account, None
+
+
+def _label(item):
+    return item.name if isinstance(item, Merchant) else item.user.display_name
 
 
 def serialize_branch(merchant):
@@ -119,7 +124,11 @@ class AdminBranchListView(APIView):
             )
         except StaffAccountError as error:
             return _error('STAFF_ACCOUNT_INVALID', str(error))
-        logger.info('admin %s created branch %s (%s)', request.user.pk, branch.pk, branch.user.email)
+        record_admin_action(
+            request.user, 'branch.create', target_type='branch', target_id=branch.pk, target_label=branch.name,
+            changes={'email': {'from': None, 'to': branch.user.email}, 'address': {'from': None, 'to': branch.address}},
+            request=request,
+        )
         return Response({'success': True, 'data': serialize_branch(branch)}, status=status.HTTP_201_CREATED)
 
 
@@ -142,7 +151,11 @@ class AdminRiderListView(APIView):
             rider = create_rider(account, vehicle_plate=_text(data, 'vehicle_plate'))
         except StaffAccountError as error:
             return _error('STAFF_ACCOUNT_INVALID', str(error))
-        logger.info('admin %s created rider %s (%s)', request.user.pk, rider.pk, rider.user.email)
+        record_admin_action(
+            request.user, 'rider.create', target_type='rider', target_id=rider.pk, target_label=rider.user.display_name,
+            changes={'email': {'from': None, 'to': rider.user.email}, 'vehicle_plate': {'from': None, 'to': rider.vehicle_plate}},
+            request=request,
+        )
         return Response({'success': True, 'data': serialize_rider(rider)}, status=status.HTTP_201_CREATED)
 
 
@@ -155,6 +168,7 @@ class _StaffDetailBase(APIView):
     set_active = None
     serialize = None
     not_found_message = ''
+    audit_type = ''
 
     def _get(self, pk):
         return self.model.objects.select_related('user').filter(pk=pk).first()
@@ -165,12 +179,18 @@ class _StaffDetailBase(APIView):
             return _error('NOT_FOUND', self.not_found_message, status.HTTP_404_NOT_FOUND)
         if 'is_active' not in request.data:
             return _error('NOTHING_TO_UPDATE', 'ส่ง is_active มาด้วย')
+        was_active = item.user.is_active
         try:
             type(self).set_active(item, _bool(request.data, 'is_active'))
         except StaffAccountError as error:
             return _error('STAFF_ACCOUNT_INVALID', str(error), status.HTTP_409_CONFLICT)
         item.user.refresh_from_db()
-        logger.info('admin %s set %s %s active=%s', request.user.pk, self.model.__name__, item.pk, item.user.is_active)
+        if was_active != item.user.is_active:
+            record_admin_action(
+                request.user, f"{self.audit_type}.{'activate' if item.user.is_active else 'deactivate'}",
+                target_type=self.audit_type, target_id=item.pk, target_label=_label(item),
+                changes={'is_active': {'from': was_active, 'to': item.user.is_active}}, request=request,
+            )
         return Response({'success': True, 'data': type(self).serialize(item)})
 
 
@@ -179,6 +199,7 @@ class AdminBranchDetailView(_StaffDetailBase):
     set_active = staticmethod(set_branch_active)
     serialize = staticmethod(serialize_branch)
     not_found_message = 'ไม่พบสาขานี้'
+    audit_type = 'branch'
 
 
 class AdminRiderDetailView(_StaffDetailBase):
@@ -186,6 +207,7 @@ class AdminRiderDetailView(_StaffDetailBase):
     set_active = staticmethod(set_rider_active)
     serialize = staticmethod(serialize_rider)
     not_found_message = 'ไม่พบไรเดอร์คนนี้'
+    audit_type = 'rider'
 
 
 class _StaffPasswordBase(APIView):
@@ -193,6 +215,7 @@ class _StaffPasswordBase(APIView):
     throttle_scope = 'admin'
     model = None
     not_found_message = ''
+    audit_type = ''
 
     def post(self, request, pk):
         item = self.model.objects.select_related('user').filter(pk=pk).first()
@@ -205,15 +228,20 @@ class _StaffPasswordBase(APIView):
             reset_staff_password(item.user, password)
         except StaffAccountError as error:
             return _error('STAFF_ACCOUNT_INVALID', str(error))
-        logger.info('admin %s reset password of %s %s', request.user.pk, self.model.__name__, item.pk)
+        record_admin_action(
+            request.user, f'{self.audit_type}.password_reset', target_type=self.audit_type,
+            target_id=item.pk, target_label=_label(item), request=request,
+        )
         return Response({'success': True, 'message': 'ตั้งรหัสผ่านใหม่แล้ว เครื่องที่ล็อกอินค้างไว้ต้องล็อกอินใหม่'})
 
 
 class AdminBranchPasswordView(_StaffPasswordBase):
     model = Merchant
     not_found_message = 'ไม่พบสาขานี้'
+    audit_type = 'branch'
 
 
 class AdminRiderPasswordView(_StaffPasswordBase):
     model = RiderProfile
     not_found_message = 'ไม่พบไรเดอร์คนนี้'
+    audit_type = 'rider'

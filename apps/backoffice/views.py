@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.backoffice.audit import record_admin_action
 from apps.backoffice.serializers import AdminSlipSerializer
 from apps.orders.models import Order
 from apps.payments.models import SlipStatus, SlipTransaction
@@ -178,6 +179,12 @@ class SlipApproveView(APIView):
             return _review_error_response(error)
 
         order = Order.objects.filter(pk=slip.order_id).first()
+        record_admin_action(
+            request.user, 'slip.approve', target_type='order', target_id=slip.order_id,
+            target_label=order.order_number if order else '', note=note,
+            changes={'slip': {'from': 'PENDING', 'to': slip.status}, 'amount': {'from': None, 'to': str(slip.amount)}},
+            request=request,
+        )
         return Response({
             'success': True,
             'data': {
@@ -209,6 +216,11 @@ class SlipRejectView(APIView):
         max_attempts = int(getattr(settings, 'SLIP_MAX_ATTEMPTS', 3))
         attempts_left = max(0, max_attempts - slip.attempt_no)
         order = Order.objects.filter(pk=slip.order_id).first()
+        record_admin_action(
+            request.user, 'slip.reject', target_type='order', target_id=slip.order_id,
+            target_label=order.order_number if order else '', note=reason,
+            changes={'slip': {'from': 'PENDING', 'to': slip.status}}, request=request,
+        )
         return Response({
             'success': True,
             'data': {
